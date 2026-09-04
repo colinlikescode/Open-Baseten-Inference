@@ -1,0 +1,7 @@
+# Latency objective at 32 concurrent users with hard limits.
+objective: latency
+profile:
+  name: chat
+  expected_concurrency: 32
+  max_p95_ttft_ms: 500
+  max_p95_latency_ms: 5000

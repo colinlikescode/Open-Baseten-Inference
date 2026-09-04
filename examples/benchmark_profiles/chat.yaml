@@ -1,0 +1,3 @@
+# servepilot serve MODEL --config examples/benchmark_profiles/chat.yaml
+profile:
+  name: chat

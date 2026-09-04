@@ -1,0 +1,13 @@
+{
+ "architectures": [
+  "GPT2LMHeadModel"
+ ],
+ "model_type": "gpt2",
+ "n_embd": 768,
+ "n_layer": 12,
+ "n_head": 12,
+ "n_positions": 1024,
+ "vocab_size": 50257,
+ "activation_function": "gelu_new",
+ "tie_word_embeddings": true
+}

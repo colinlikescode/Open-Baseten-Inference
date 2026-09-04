@@ -1,0 +1,9 @@
+# A RAG-style workload: big prompts, short answers, a shared system prompt.
+profile:
+  name: custom
+  input_tokens_p50: 3000
+  input_tokens_p95: 6000
+  output_tokens_p50: 200
+  output_tokens_p95: 500
+  max_context_tokens: 8192
+  shared_prefix_fraction: 0.2

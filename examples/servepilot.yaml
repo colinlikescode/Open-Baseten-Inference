@@ -1,0 +1,16 @@
+# A chat deployment on all GPUs, tuned for throughput, listening on every interface.
+model: Qwen/Qwen3-32B
+engine: auto
+objective: throughput
+profile:
+  name: chat
+  expected_concurrency: 64
+hardware:
+  gpus: auto
+  memory_headroom: 0.08
+server:
+  host: 0.0.0.0
+  port: 8000
+tuning:
+  enabled: true
+  use_cache: true

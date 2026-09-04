@@ -1,0 +1,8 @@
+{
+ "architectures": [
+  "MysteryForCausalLM"
+ ],
+ "model_type": "mystery",
+ "vocab_size": 32000,
+ "torch_dtype": "bfloat16"
+}

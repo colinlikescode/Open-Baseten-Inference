@@ -1,0 +1,3 @@
+# Long prompts, short answers. Fewer requests fit in KV cache, so expect lower concurrency.
+profile:
+  name: long-context

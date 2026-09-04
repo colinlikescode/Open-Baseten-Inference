@@ -1,0 +1,62 @@
+# Every key ServePilot understands, with its default. Copy what you need.
+# Use it with: servepilot serve --config servepilot.yaml
+# Flags on the command line override values in this file.
+
+model: Qwen/Qwen3-32B          # Hugging Face id or local directory (required here or as an argument)
+engine: auto                   # auto | vllm | sglang
+objective: throughput          # throughput | latency | balanced
+
+profile:
+  name: chat                   # chat | long-context | decode-heavy | custom
+  # Token lengths. Leave them out to use the preset's numbers.
+  input_tokens_p50: 512
+  input_tokens_p95: 2048
+  output_tokens_p50: 256
+  output_tokens_p95: 768
+  max_context_tokens: 8192
+  expected_concurrency: null   # requests at once you expect; needed for good latency tuning
+  target_request_rate: null    # requests per second for open-loop latency benchmarks
+  shared_prefix_fraction: 0.0  # share of each prompt that is a common prefix (system prompt)
+  streaming: true
+  # Hard limits in milliseconds. A layout that breaks one cannot win while another meets it.
+  max_p95_ttft_ms: null
+  max_p95_latency_ms: null
+  max_p95_tpot_ms: null
+
+hardware:
+  gpus: auto                   # auto, or a list like [0, 1, 2, 3]
+  memory_headroom: 0.08        # share of GPU memory ServePilot keeps free
+  allow_busy_gpus: false       # do not warn when other processes already use the GPUs
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  served_model_name: null      # public name in /v1/models (default: the model id)
+  max_queue_depth: 1024        # requests waiting for a slot before ServePilot answers 503
+
+tuning:
+  enabled: true                # false: serve the best static guess, marked as unbenchmarked
+  use_cache: true              # reuse a saved result when hardware, model and traffic match
+  max_structural_candidates: 6 # how many layouts to launch in stage A
+  top_k: 2                     # how many of them get a concurrency sweep
+  stage_a_requests: 32         # requests per stage A benchmark (at least 2 x concurrency)
+  sweep_requests: 32           # requests per sweep point
+  final_multiplier: 4          # the final confirmation uses sweep_requests x this
+  memory_tuning: true          # try a larger engine memory fraction for the winner
+  startup_timeout_seconds: 1200
+  seed: 1234                   # benchmark prompts are generated from this seed
+  resume: false                # reuse finished candidates from an interrupted run
+
+model_options:
+  revision: null               # branch, tag or commit
+  trust_remote_code: false
+  kv_cache_dtype: null         # for example fp8
+
+constraints:                   # these narrow the search; they never skip validation
+  tp: null                     # force the tensor-parallel size
+  replicas: null               # force the number of model copies
+  context_length: null
+  max_concurrency: null        # cap the requests one replica runs at once
+  memory_fraction: null        # force the engine memory fraction
+  allow_context_override: false
+  engine_args: {}              # extra flags passed straight to the engine, e.g. enable-prefix-caching: true
