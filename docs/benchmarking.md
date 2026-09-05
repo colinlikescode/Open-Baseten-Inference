@@ -21,7 +21,12 @@ so.
 | TPOT | `(latency − TTFT) ÷ (output tokens − 1)` |
 | tokens | from the API `usage` object when present (`stream_options.include_usage`), otherwise counted with the tokenizer |
 
-Non-streaming runs have no TTFT.
+Non-streaming runs have no TTFT or TPOT: a complete response does not reveal when the first
+token was generated. When `usage` is absent, output tokens are counted from the complete text,
+so splitting the same output into different streaming chunks does not change the count.
+
+Malformed responses and streamed API errors count as failed requests, even after partial
+output. A stream must end with a finish reason or `[DONE]` marker to count as complete.
 
 ## Aggregates
 
@@ -50,8 +55,10 @@ successes) are invalid and cannot win while a valid result exists.
 | latency | `(0.5·L + 0.25·T + 0.25·P) × error_factor`, where `L`, `T`, `P` are `best ÷ candidate` for p95 latency, p95 TTFT and p95 TPOT (missing metrics are dropped and the weights renormalised) |
 | balanced | `sqrt(throughput_norm × latency_norm) × error_factor`, with `throughput_norm = tps ÷ best_tps` and `latency_norm = best_p95 ÷ candidate_p95` |
 
-Hard limits (`--max-p95-ttft`, `--max-p95-latency`, `--max-p95-tpot`) make a result
-ineligible. If nothing meets them, the best valid result wins and the output says so.
+Exceeding a hard limit (`--max-p95-ttft`, `--max-p95-latency`, `--max-p95-tpot`) makes a result
+ineligible. A missing measurement also makes a result ineligible for a limit on that metric;
+for example, a non-streaming result cannot verify a TTFT limit. If nothing meets the limits,
+the best valid result wins and the output says so.
 
 ## Stages
 

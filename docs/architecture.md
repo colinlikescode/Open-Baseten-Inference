@@ -62,6 +62,9 @@ code paths.
    only if the first replica failed before sending any response. The process runs on uvloop
    with uvicorn's httptools parser; the benchmark load generator shares that loop, so this
    also raises the ceiling on what tuning can measure.
+   Cancellation and client disconnects release the concurrency slot, including failures before
+   response headers are sent. A backend disconnect after partial output aborts the response so
+   clients can detect the incomplete generation.
 4. `HealthChecker` probes replicas, pulls dead or failing ones out of rotation, restarts them
    with backoff up to a limit, and keeps the others serving.
 5. A runtime state file (`~/.local/state/servepilot/runtime.json`) records PIDs, ports and

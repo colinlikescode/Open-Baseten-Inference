@@ -56,20 +56,18 @@ def slo_violations(result: BenchmarkResult, slo: LatencyConstraints | None) -> l
     if slo is None or slo.is_empty:
         return []
     out: list[str] = []
-    if (
-        slo.max_p95_ttft_ms is not None
-        and result.ttft_p95_ms is not None
-        and result.ttft_p95_ms > slo.max_p95_ttft_ms
-    ):
-        out.append(f"p95 TTFT {result.ttft_p95_ms:.0f} ms > {slo.max_p95_ttft_ms:.0f} ms")
+    if slo.max_p95_ttft_ms is not None:
+        if result.ttft_p95_ms is None:
+            out.append("p95 TTFT unavailable; cannot verify the requested SLO")
+        elif result.ttft_p95_ms > slo.max_p95_ttft_ms:
+            out.append(f"p95 TTFT {result.ttft_p95_ms:.0f} ms > {slo.max_p95_ttft_ms:.0f} ms")
     if slo.max_p95_latency_ms is not None and result.latency_p95_ms > slo.max_p95_latency_ms:
         out.append(f"p95 latency {result.latency_p95_ms:.0f} ms > {slo.max_p95_latency_ms:.0f} ms")
-    if (
-        slo.max_p95_tpot_ms is not None
-        and result.tpot_p95_ms is not None
-        and result.tpot_p95_ms > slo.max_p95_tpot_ms
-    ):
-        out.append(f"p95 TPOT {result.tpot_p95_ms:.1f} ms > {slo.max_p95_tpot_ms:.1f} ms")
+    if slo.max_p95_tpot_ms is not None:
+        if result.tpot_p95_ms is None:
+            out.append("p95 TPOT unavailable; cannot verify the requested SLO")
+        elif result.tpot_p95_ms > slo.max_p95_tpot_ms:
+            out.append(f"p95 TPOT {result.tpot_p95_ms:.1f} ms > {slo.max_p95_tpot_ms:.1f} ms")
     return out
 
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from servepilot.logging import get_logger
 from servepilot.runtime.router import NoHealthyReplicaError, OverloadedError, RouteLease
@@ -37,6 +38,28 @@ HOP_BY_HOP = {
     "host",
     "content-length",
 }
+
+
+class _ProxyResponse(StreamingResponse):
+    """Own cleanup across the entire ASGI response, including failures sending headers."""
+
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        *,
+        status_code: int,
+        headers: dict[str, str],
+        media_type: str | None,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> None:
+        super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
+        self._cleanup = cleanup
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._cleanup()
 
 
 def error_response(status: int, message: str, error_type: str = "server_error") -> JSONResponse:
@@ -114,6 +137,21 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
     started = time.perf_counter()
     metrics.requests_inflight.inc()
     handed_off = False
+    lease: RouteLease | None = None
+    upstream: httpx.Response | None = None
+    error: str | None = None
+
+    async def cleanup() -> None:
+        try:
+            if upstream is not None:
+                await upstream.aclose()
+        finally:
+            # Accounting must balance even if closing the connection raises or is cancelled.
+            if lease is not None:
+                router.release(lease, failed=error is not None, error=error)
+            metrics.requests_inflight.dec()
+            metrics.request_latency.labels(endpoint=endpoint).observe(time.perf_counter() - started)
+
     try:
         try:
             lease = await router.acquire({"endpoint": endpoint})
@@ -134,7 +172,6 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
             ctx, request, lease, body, _forward_headers(request)
         )
         if upstream is None:
-            router.release(lease, failed=True, error=error)
             metrics.request_errors_total.labels(
                 endpoint=endpoint, reason="backend_unreachable"
             ).inc()
@@ -146,37 +183,36 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
         ).inc()
         response_headers = _response_headers(upstream)
         response_headers["x-servepilot-replica"] = lease.replica.id
+        backend_response = upstream
+        active_lease = lease
 
         async def body_stream() -> AsyncIterator[bytes]:
-            stream_error: str | None = None
+            nonlocal error
             try:
-                async for chunk in upstream.aiter_raw():
+                async for chunk in backend_response.aiter_raw():
                     yield chunk
             except httpx.HTTPError as exc:
                 # Backend dropped mid-stream: output may already have been delivered, never retry.
-                stream_error = f"{type(exc).__name__}: {exc}"
+                error = f"{type(exc).__name__}: {exc}"
                 log.warning(
-                    "replica %s dropped the connection mid-response: %s", lease.replica.id, exc
+                    "replica %s dropped the connection mid-response: %s",
+                    active_lease.replica.id,
+                    exc,
                 )
                 metrics.request_errors_total.labels(
                     endpoint=endpoint, reason="backend_disconnect"
                 ).inc()
-            finally:
-                await upstream.aclose()
-                router.release(lease, failed=stream_error is not None, error=stream_error)
-                metrics.requests_inflight.dec()
-                metrics.request_latency.labels(endpoint=endpoint).observe(
-                    time.perf_counter() - started
-                )
+                raise
 
-        handed_off = True
-        return StreamingResponse(
+        response = _ProxyResponse(
             body_stream(),
             status_code=upstream.status_code,
             headers=response_headers,
             media_type=upstream.headers.get("content-type"),
+            cleanup=cleanup,
         )
+        handed_off = True
+        return response
     finally:
         if not handed_off:
-            metrics.requests_inflight.dec()
-            metrics.request_latency.labels(endpoint=endpoint).observe(time.perf_counter() - started)
+            await cleanup()

@@ -138,6 +138,24 @@ class TestObjectives:
 class TestSLO:
     slo = LatencyConstraints(max_p95_latency_ms=600, max_p95_ttft_ms=150)
 
+    @pytest.mark.parametrize("metric", ["ttft", "tpot"])
+    def test_missing_required_metric_cannot_satisfy_slo(self, metric: str) -> None:
+        slo = LatencyConstraints.model_validate({f"max_p95_{metric}_ms": 150})
+        missing = result("unmeasured", 2000, 500, ttft=None, tpot=None)
+        measured = result("measured", 1000, 500)
+        violations = slo_violations(missing, slo)
+        assert len(violations) == 1 and metric.upper() in violations[0]
+        scored = score_results([missing, measured], Objective.THROUGHPUT, slo)
+        best = select_best(scored)
+        assert best is not None and best.winner.result.candidate_id == "measured"
+        fallback = select_best(scored[:1])
+        assert fallback is not None and not fallback.slo_satisfied
+        assert not should_continue_sweep([missing], slo).continue_sweep
+
+    def test_missing_optional_metrics_do_not_violate_slo(self) -> None:
+        missing = result("unmeasured", 2000, 500, ttft=None, tpot=None)
+        assert slo_violations(missing, LatencyConstraints(max_p95_latency_ms=600)) == []
+
     def test_violations_listed(self) -> None:
         v = slo_violations(result("a", 1000, 900, ttft=200), self.slo)
         assert (
