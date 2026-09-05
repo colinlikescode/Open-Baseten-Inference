@@ -12,7 +12,7 @@ from servepilot.planner.memory import format_bytes
 from servepilot.schemas.benchmark import BenchmarkResult, ParetoPoint
 from servepilot.schemas.hardware import HardwareSnapshot
 from servepilot.schemas.model import ModelProfile
-from servepilot.schemas.plan import CandidateEvaluation, CandidatePlan, PlanningResult, SelectedPlan
+from servepilot.schemas.plan import CandidateEvaluation, PlanningResult, SelectedPlan
 from servepilot.schemas.workload import WorkloadProfile
 
 
@@ -281,10 +281,6 @@ def render_selected(
         console.print("[bold]Equivalent backend configuration[/]")
         for c in commands:
             console.print(f"  {c}", highlight=False, markup=False)
-
-
-def render_candidate_line(plan: CandidatePlan) -> str:
-    return plan.label()
 
 
 def summarize_result(r: BenchmarkResult) -> str:

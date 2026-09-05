@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from servepilot.api.app import ServingContext, create_app
@@ -22,6 +22,7 @@ from servepilot.constants import (
 )
 from servepilot.engines.process import Launcher
 from servepilot.engines.registry import EngineRegistry
+from servepilot.exceptions import LaunchError
 from servepilot.hardware.base import HardwareProvider
 from servepilot.logging import get_logger
 from servepilot.models.tokenizer import TokenCounter
@@ -47,9 +48,15 @@ CLEANUP_MEMORY_TOLERANCE_BYTES = 2 * GIB
 CLEANUP_MEMORY_TIMEOUT_SECONDS = 60.0
 
 
-class CandidateLaunchFailed(Exception):
-    def __init__(self, failure: CandidateFailure) -> None:
-        super().__init__(failure.message)
+class CandidateLaunchFailed(LaunchError):
+    """A candidate could not be launched (or cleaned up); carries the classified failure.
+
+    The tuner catches this per candidate and moves on. It only escapes when cleanup fails,
+    which stops tuning rather than measuring on a contaminated GPU.
+    """
+
+    def __init__(self, failure: CandidateFailure, *, hints: Sequence[str] | None = None) -> None:
+        super().__init__(failure.message, hints=hints)
         self.failure = failure
 
 
@@ -131,7 +138,11 @@ class LaunchedSession:
                         type=FailureType.ENGINE_CRASH,
                         message="engine processes could not be terminated after the benchmark",
                         stage="cleanup",
-                    )
+                    ),
+                    hints=[
+                        "Check `nvidia-smi` for leftover engine processes and stop them.",
+                        "Re-run tuning once the GPUs are idle; use --resume to keep finished candidates.",
+                    ],
                 )
 
 
@@ -199,10 +210,13 @@ class LaunchingEvaluator:
 
     async def open(self, plan: CandidatePlan) -> CandidateSession:
         engine = self._registry.require(plan.engine)
-        prelaunch = self.revalidate_free_memory(plan)
+        # Hardware snapshots are synchronous NVML (or Ray RPC) calls; keep them off the loop.
+        prelaunch = await asyncio.to_thread(self.revalidate_free_memory, plan)
         if prelaunch is not None:
             raise CandidateLaunchFailed(prelaunch)
-        baseline = self._free_memory(plan.gpu_ids) if self._verify_cleanup else {}
+        baseline = (
+            await asyncio.to_thread(self._free_memory, plan.gpu_ids) if self._verify_cleanup else {}
+        )
 
         router = ReplicaRouter(max_concurrency=None)
         replica_set = ReplicaSet(
@@ -224,6 +238,14 @@ class LaunchingEvaluator:
         except ReplicaLaunchError as exc:
             await self._wait_for_cleanup(baseline)
             raise CandidateLaunchFailed(exc.failure) from exc
+        except LaunchError as exc:
+            # The launcher itself failed (no process to classify); record it on the candidate.
+            await self._wait_for_cleanup(baseline)
+            raise CandidateLaunchFailed(
+                CandidateFailure(
+                    type=FailureType.ENGINE_CRASH, message=exc.message, stage="startup"
+                )
+            ) from exc
         launch_seconds = time.monotonic() - start
 
         ctx = ServingContext(

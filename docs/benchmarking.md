@@ -65,7 +65,8 @@ layout's capacity. The sweep stops when errors appear, a limit breaks, throughpu
 than 5% below the best point, or it plateaus (less than 2% gain while p95 latency rises more
 than 10%, or under 2% gain twice in a row). Then the midpoints on both sides of the best
 point are tested. With the latency objective the sweep only runs upward under a limit, to
-find the highest concurrency that still meets it.
+find the highest concurrency that still meets it. If none of the top layouts can be
+relaunched for its sweep, the stage A measurements decide.
 
 **Operating point.** Walking up the sweep, a step that gains less than 2% throughput while
 adding more than 10% p95 latency does not count as an improvement, so the lower concurrency

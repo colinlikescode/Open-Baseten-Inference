@@ -132,10 +132,6 @@ class CandidatePlan(BaseModel):
         return len(self.gpu_ids)
 
     @property
-    def gpus_per_replica(self) -> int:
-        return self.tensor_parallel_size * self.pipeline_parallel_size * self.data_parallel_size
-
-    @property
     def spans_nodes(self) -> bool:
         return bool(self.replica_nodes) and any(len(set(n)) > 1 for n in self.replica_nodes or [])
 

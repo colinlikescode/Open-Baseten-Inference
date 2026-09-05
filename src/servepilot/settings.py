@@ -201,24 +201,27 @@ class ServePilotConfig(BaseModel):
                 base = workload_from_preset(preset_name)
             values = base.model_dump()
             values["name"] = preset_name
-            for key in (
+            # Changing the token distribution without naming a preset makes the profile custom;
+            # context, concurrency, request rate and streaming leave the preset name alone.
+            distribution_keys = (
                 "input_tokens_p50",
                 "input_tokens_p95",
                 "output_tokens_p50",
                 "output_tokens_p95",
+                "shared_prefix_fraction",
+            )
+            for key in (
+                *distribution_keys,
                 "max_context_tokens",
                 "expected_concurrency",
                 "target_request_rate",
-                "shared_prefix_fraction",
                 "streaming",
             ):
                 v = getattr(p, key)
                 if v is not None:
                     values[key] = v
-                    if key not in ("expected_concurrency", "target_request_rate", "streaming"):
-                        values["name"] = preset_name if p.name else "custom"
-            # If the caller only raised max_context_tokens keep the preset name; if they changed
-            # token distributions without naming a preset the profile is custom.
+                    if key in distribution_keys and not p.name:
+                        values["name"] = "custom"
             values["objective"] = self.objective
             values["latency_constraints"] = constraints
             # Grow the context automatically when the user asked for longer prompts than the
@@ -227,15 +230,26 @@ class ServePilotConfig(BaseModel):
             if values["max_context_tokens"] < needed and p.max_context_tokens is None:
                 values["max_context_tokens"] = needed
             return WorkloadProfile.model_validate(values)
-        except (ValidationError, ValueError) as exc:
-            raise ConfigurationError(f"invalid workload profile: {exc}") from exc
+        except ValidationError as exc:
+            raise ConfigurationError(
+                _format_validation_error(exc, header="workload profile is invalid:"),
+                hints=[
+                    "Raise --context-length, or lower --input-tokens-p95 / --output-tokens-p95.",
+                    "Presets: chat, long-context, decode-heavy (see `servepilot plan --help`).",
+                ],
+            ) from exc
+        except ValueError as exc:
+            raise ConfigurationError(f"workload profile is invalid: {exc}") from exc
 
 
-def _format_validation_error(exc: ValidationError) -> str:
-    lines = ["configuration is invalid:"]
+def _format_validation_error(
+    exc: ValidationError, *, header: str = "configuration is invalid:"
+) -> str:
+    lines = [header]
     for err in exc.errors():
         loc = ".".join(str(p) for p in err.get("loc", ()))
-        lines.append(f"  {loc or '<root>'}: {err.get('msg')}")
+        msg = str(err.get("msg", "")).removeprefix("Value error, ")
+        lines.append(f"  {loc}: {msg}" if loc else f"  {msg}")
     return "\n".join(lines)
 
 

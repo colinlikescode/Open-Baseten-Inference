@@ -71,8 +71,12 @@ def rewrite_model_field(body: bytes, served_name: str | None, backend_name: str 
 
 async def _send_with_retry(
     ctx: ServingContext, request: Request, lease: RouteLease, body: bytes, headers: dict[str, str]
-) -> httpx.Response | None:
-    """Send to the leased replica; on a pre-body failure re-route once to another healthy replica."""
+) -> tuple[httpx.Response | None, str | None]:
+    """Send to the leased replica; on a pre-body failure re-route once to another healthy replica.
+
+    Returns ``(response, None)`` on success or ``(None, error)`` when every attempt failed; the
+    caller releases the lease with that error so each failed attempt is charged exactly once.
+    """
     router = ctx.router
     attempts = 0
     while True:
@@ -83,25 +87,23 @@ async def _send_with_retry(
         upstream_request = ctx.http.build_request(
             request.method, url, content=body, headers=headers
         )
-        upstream: httpx.Response | None
         try:
             upstream = await ctx.http.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
+            error = f"{type(exc).__name__}: {exc}"
             log.warning("replica %s failed before responding: %s", replica.id, exc)
-            router.mark_failure(replica.id, str(exc))
-            upstream = None
-        if upstream is not None and upstream.status_code < 500:
-            return upstream
-        if upstream is not None:
-            router.mark_failure(replica.id, f"HTTP {upstream.status_code}")
+        else:
+            if upstream.status_code < 500:
+                return upstream, None
+            error = f"HTTP {upstream.status_code}"
             await upstream.aclose()
         if attempts >= 1:
-            return None
+            return None, error
         attempts += 1
         try:
-            router.reroute(lease)
+            router.reroute(lease, error=error)
         except NoHealthyReplicaError:
-            return None
+            return None, error
 
 
 async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str) -> Response:
@@ -128,9 +130,11 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
                 503, "no healthy model replica is available", "service_unavailable"
             )
 
-        upstream = await _send_with_retry(ctx, request, lease, body, _forward_headers(request))
+        upstream, error = await _send_with_retry(
+            ctx, request, lease, body, _forward_headers(request)
+        )
         if upstream is None:
-            router.release(lease, failed=True)
+            router.release(lease, failed=True, error=error)
             metrics.request_errors_total.labels(
                 endpoint=endpoint, reason="backend_unreachable"
             ).inc()
@@ -144,13 +148,13 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
         response_headers["x-servepilot-replica"] = lease.replica.id
 
         async def body_stream() -> AsyncIterator[bytes]:
-            failed = False
+            stream_error: str | None = None
             try:
                 async for chunk in upstream.aiter_raw():
                     yield chunk
             except httpx.HTTPError as exc:
                 # Backend dropped mid-stream: output may already have been delivered, never retry.
-                failed = True
+                stream_error = f"{type(exc).__name__}: {exc}"
                 log.warning(
                     "replica %s dropped the connection mid-response: %s", lease.replica.id, exc
                 )
@@ -159,7 +163,7 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
                 ).inc()
             finally:
                 await upstream.aclose()
-                router.release(lease, failed=failed)
+                router.release(lease, failed=stream_error is not None, error=stream_error)
                 metrics.requests_inflight.dec()
                 metrics.request_latency.labels(endpoint=endpoint).observe(
                     time.perf_counter() - started

@@ -16,7 +16,7 @@ MIB = 1024 * KIB
 GIB = 1024 * MIB
 
 # ---------------------------------------------------------------------------
-# Exit codes (documented in README and docs/troubleshooting.md)
+# Exit codes (documented in docs/architecture.md)
 # ---------------------------------------------------------------------------
 
 
@@ -89,8 +89,6 @@ MIN_MEMORY_FRACTION = 0.30
 MIN_KV_SEQUENCES = 1
 # Warn when other processes already hold more than this fraction of a selected GPU.
 BUSY_GPU_USED_FRACTION = 0.05
-# Reject candidates whose estimate exceeds usable memory by more than this margin.
-MEMORY_PRUNE_TOLERANCE_FRACTION = 0.0
 
 # ---------------------------------------------------------------------------
 # Tuning heuristics (see docs/benchmarking.md)
@@ -98,7 +96,6 @@ MEMORY_PRUNE_TOLERANCE_FRACTION = 0.0
 DEFAULT_MAX_STRUCTURAL_CANDIDATES = 6
 DEFAULT_TOP_K_FOR_CONCURRENCY_SWEEP = 2
 DEFAULT_STAGE_A_REQUESTS = 32
-DEFAULT_STAGE_A_CONCURRENCY = 16
 DEFAULT_SWEEP_REQUESTS_PER_POINT = 32
 DEFAULT_FINAL_CONFIRMATION_MULTIPLIER = 4
 DEFAULT_SWEEP_START_CONCURRENCY = 4
@@ -133,9 +130,3 @@ GPU_SAMPLE_INTERVAL_SECONDS = 0.5
 PROCESS_LOG_TAIL_LINES = 400
 PROCESS_LOG_TAIL_BYTES = 256 * KIB
 FAILURE_TAIL_LINES = 60
-
-# ---------------------------------------------------------------------------
-# Cache validation
-# ---------------------------------------------------------------------------
-# Free memory must be at least this fraction of the recorded plan's requirement before reuse.
-CACHE_REUSE_MIN_FREE_FRACTION = 1.0

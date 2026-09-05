@@ -38,7 +38,8 @@ log = get_logger(__name__)
 
 SERVEPILOT_PORT = 8000
 RAY_PORT = 6379  # SkyPilot's internal Ray uses 6380; ours must differ.
-ENGINE_PACKAGES = {"vllm": "vllm ninja", "sglang": '"sglang[all]"', "auto": "vllm ninja"}
+# Space-separated pip requirements; expanded unquoted in the setup script (globbing disabled).
+ENGINE_PACKAGES = {"vllm": "vllm ninja", "sglang": "sglang[all]", "auto": "vllm ninja"}
 
 
 class CloudError(ServePilotError):
@@ -95,18 +96,23 @@ class LaunchRequest:
         return f"{self.cloud}/{self.region}" if self.region else self.cloud
 
 
-SETUP_SCRIPT = """set -e
+SETUP_SCRIPT = """set -ef
 # ServePilot needs Python 3.11+; SkyPilot images do not guarantee that, so we bring uv.
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 export PATH="$HOME/.local/bin:$PATH"
+SP_PY="$HOME/servepilot-venv/bin/python"
+ENGINE_PY="$HOME/engines/$SERVEPILOT_ENGINE/bin/python"
 uv venv "$HOME/servepilot-venv" --python 3.12
-uv pip install --python "$HOME/servepilot-venv/bin/python" "$SERVEPILOT_PACKAGE[ray]"
+uv pip install --python "$SP_PY" "$SERVEPILOT_PACKAGE"
 # The engine gets its own environment so its CUDA stack never fights with ServePilot's.
 uv venv "$HOME/engines/$SERVEPILOT_ENGINE" --python 3.12
-uv pip install --python "$HOME/engines/$SERVEPILOT_ENGINE/bin/python" $SERVEPILOT_ENGINE_PACKAGES
-"$HOME/servepilot-venv/bin/servepilot" doctor --port $SERVEPILOT_PORT || true
+uv pip install --python "$ENGINE_PY" $SERVEPILOT_ENGINE_PACKAGES
+# Every Ray client must match the cluster's version: reuse the engine's Ray when it ships one.
+RAY_SPEC=$("$ENGINE_PY" -c 'import ray; print("ray==" + ray.__version__)' 2>/dev/null || echo "ray>=2.30")
+uv pip install --python "$SP_PY" "$RAY_SPEC"
+"$HOME/servepilot-venv/bin/servepilot" doctor --port "$SERVEPILOT_PORT" || true
 """
 
 RUN_SCRIPT = """set -e

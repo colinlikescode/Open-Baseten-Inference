@@ -377,6 +377,30 @@ class TestInterpreterDiscovery:
         )
         assert rt is not None and rt.python == sys.executable
 
+    def test_shebang_parsing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from servepilot.engines.interpreter import _shebang_interpreter
+
+        bare = tmp_path / "bare"
+        bare.write_text("#!\n")
+        assert _shebang_interpreter(bare) is None
+        plain = tmp_path / "plain"
+        plain.write_text("print(1)\n")
+        assert _shebang_interpreter(plain) is None
+        # `#!/usr/bin/env NAME` resolves NAME through PATH.
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        interp = bindir / "mypython"
+        interp.symlink_to(sys.executable)
+        monkeypatch.setenv("PATH", str(bindir))
+        via_env = tmp_path / "via_env"
+        via_env.write_text("#!/usr/bin/env mypython\n")
+        assert _shebang_interpreter(via_env) == str(interp)
+        missing = tmp_path / "missing"
+        missing.write_text("#!/definitely/not/here\n")
+        assert _shebang_interpreter(missing) is None
+
 
 def test_redaction_helper() -> None:
     cmd = redacted_command(

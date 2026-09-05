@@ -131,30 +131,34 @@ class ReplicaRouter:
         self.total_requests += 1
         return RouteLease(replica=replica, acquired_at=time.monotonic(), excluded={replica.id})
 
-    def reroute(self, lease: RouteLease) -> ReplicaState:
-        """Move a lease to another healthy replica (used for pre-response retries)."""
-        lease.replica.inflight_requests -= 1
-        lease.replica.failures += 1
+    def reroute(self, lease: RouteLease, *, error: str | None = None) -> ReplicaState:
+        """Move a lease to another healthy replica (used for pre-response retries).
+
+        The abandoned replica is charged one failure and gives up the in-flight slot. When no
+        other replica is available :class:`NoHealthyReplicaError` is raised and the lease is
+        left untouched, so the caller's :meth:`release` still balances the books exactly once.
+        """
         replica = self.select(excluded=lease.excluded)
+        previous = lease.replica
+        previous.inflight_requests = max(0, previous.inflight_requests - 1)
+        previous.failures += 1
+        if error is not None:
+            previous.last_error = error
         replica.inflight_requests += 1
         replica.total_requests += 1
         lease.replica = replica
         lease.excluded.add(replica.id)
         return replica
 
-    def release(self, lease: RouteLease, *, failed: bool = False) -> None:
+    def release(self, lease: RouteLease, *, failed: bool = False, error: str | None = None) -> None:
         lease.replica.inflight_requests = max(0, lease.replica.inflight_requests - 1)
         if failed:
             lease.replica.failures += 1
             self.total_errors += 1
+            if error is not None:
+                lease.replica.last_error = error
         if self._semaphore is not None:
             self._semaphore.release()
-
-    def mark_failure(self, replica_id: str, error: str) -> None:
-        r = self._replicas.get(replica_id)
-        if r is not None:
-            r.failures += 1
-            r.last_error = error
 
     # ------------------------------------------------------------------ introspection
     def snapshot(self) -> dict[str, Any]:

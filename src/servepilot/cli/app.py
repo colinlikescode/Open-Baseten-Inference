@@ -397,7 +397,9 @@ def tune(
     console.print()
     render_workload(console, ws.workload)
     render_plan(console, planning, explanation)
-    run = run_async(run_tune(ws, planning, console=console, resume=resume))
+    run = run_async(
+        run_tune(ws, planning, console=console, resume=resume or ws.config.tuning.resume)
+    )
     console.print()
     render_results_table(console, run.outcome.evaluations)
     console.print()
@@ -475,6 +477,10 @@ def serve(
     flags = _flags(**{k: v for k, v in locals().items() if k in PlanFlags.__dataclass_fields__})
     ws = build_workspace(flags, state, on_engine_line=_engine_line_printer(state))
     console = state.err_console if json_output else state.console
+    if not dry_run:
+        # Refuse before tuning: a live deployment would both block the port later and share
+        # the GPUs with the candidates being measured.
+        _refuse_if_deployment_live(ws)
     console.print(f"[bold]ServePilot {__version__}[/]\n")
     console.print("Inspecting hardware...")
     render_hardware(console, ws.hardware)
@@ -492,7 +498,7 @@ def serve(
         console,
         retune=retune,
         no_tune=no_tune,
-        resume=resume,
+        resume=resume or ws.config.tuning.resume,
         use_cache=ws.config.tuning.use_cache,
     )
     if not selected.equivalent_commands:
@@ -555,12 +561,7 @@ def serve(
         startup_timeout=ws.config.tuning.startup_timeout_seconds,
         on_event=lambda msg: console.print(f"[dim]{msg}[/]"),
     )
-    existing = ws.state_store.read()
-    if existing is not None and ws.state_store.is_live(existing):
-        raise RuntimeStateError(
-            f"a ServePilot deployment is already running (pid {existing.servepilot_pid}, port {existing.public_port}).",
-            hints=["Run `servepilot stop` first, or use a different SERVEPILOT_STATE_DIR."],
-        )
+    _refuse_if_deployment_live(ws)  # tuning may have taken a while; check again before binding
     console.print(f"\nStarting {selected.plan.replica_count} replica(s)... (Ctrl-C to stop)")
 
     async def _serve() -> None:
@@ -574,6 +575,15 @@ def serve(
             }
         )
     run_async(_serve())
+
+
+def _refuse_if_deployment_live(ws: Workspace) -> None:
+    existing = ws.state_store.read()
+    if existing is not None and ws.state_store.is_live(existing):
+        raise RuntimeStateError(
+            f"a ServePilot deployment is already running (pid {existing.servepilot_pid}, port {existing.public_port}).",
+            hints=["Run `servepilot stop` first, or use a different SERVEPILOT_STATE_DIR."],
+        )
 
 
 def _select_plan(

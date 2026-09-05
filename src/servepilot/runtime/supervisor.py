@@ -184,7 +184,7 @@ class Deployment:
             ) from exc
         await self.server.start()
         await self.health.start()
-        self._write_state()
+        await asyncio.to_thread(self._write_state)  # fsync'd write; keep it off the loop
         self.ready.set()
         self._on_event(f"serving {self.served_model_name} at {self.base_url}/v1")
 
@@ -198,7 +198,7 @@ class Deployment:
         await self.launcher.shutdown_all()
         with contextlib.suppress(Exception):
             await self.ctx.aclose()
-        self.state_store.clear()
+        await asyncio.to_thread(self.state_store.clear)
         self._on_event("shutdown complete")
 
     async def run(self) -> None:

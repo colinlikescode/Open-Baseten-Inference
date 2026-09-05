@@ -109,10 +109,25 @@ class TestTaskRendering:
         assert task["envs"]["SERVEPILOT_ENGINE_PACKAGES"].startswith("vllm")
         assert task["secrets"] == {"HF_TOKEN": "hf_secret"}
         assert "servepilot-venv" in task["setup"] and 'serve "$SERVEPILOT_MODEL"' in task["run"]
+        # `servepilot==1.0.0[ray]` is not a valid requirement; Ray is installed separately and
+        # version-matched to the engine's so every client can join the same cluster.
+        assert "[ray]" not in task["setup"] and "RAY_SPEC" in task["setup"]
         redacted = render_task_yaml(req, redact=True)
         assert "hf_secret" not in redacted and "HF_TOKEN: '***'" in redacted
         parsed = yaml.safe_load(render_task_yaml(req))
         assert parsed["secrets"]["HF_TOKEN"] == "hf_secret" and parsed["run"] == task["run"]
+
+    def test_scripts_are_valid_shell(self) -> None:
+        import shutil
+        import subprocess
+
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash not available")
+        task = render_task(LaunchRequest(model="m", cloud="aws", accelerators="H100:8", nodes=2))
+        for script in (task["setup"], task["run"]):
+            check = subprocess.run([bash, "-n"], input=script, capture_output=True, text=True)
+            assert check.returncode == 0, check.stderr
 
     def test_multi_node_accelerators_spot_autostop_sglang(self) -> None:
         req = LaunchRequest(
@@ -132,8 +147,10 @@ class TestTaskRendering:
         assert task["resources"]["autostop"] == {"idle_minutes": 30, "down": True}
         assert (
             task["envs"]["SERVEPILOT_ENGINE"] == "sglang"
-            and "sglang[all]" in task["envs"]["SERVEPILOT_ENGINE_PACKAGES"]
+            and task["envs"]["SERVEPILOT_ENGINE_PACKAGES"] == "sglang[all]"
         )
+        # Expanded unquoted by the setup script: literal quote characters would reach pip.
+        assert '"' not in task["envs"]["SERVEPILOT_ENGINE_PACKAGES"]
         assert task["envs"]["SERVEPILOT_ARGS"] == "--engine sglang"
         assert f"--port={RAY_PORT}" in task["run"] and "SKYPILOT_NODE_RANK" in task["run"]
         assert "secrets" not in task
@@ -333,7 +350,9 @@ class TestCloudCLI:
             Path(payload["task_path"]).exists()
             and oct(Path(payload["task_path"]).stat().st_mode & 0o777) == "0o600"
         )
-        assert payload["planning"]["candidates"]
+        # Only vLLM gets installed for the default engine, so the pre-launch plan shows only vLLM.
+        engines = {c["engine"] for c in payload["planning"]["candidates"]}
+        assert engines == {"vllm"} and task["envs"]["SERVEPILOT_ENGINE"] == "vllm"
 
     def test_launch_without_sky_is_actionable(
         self, model_dir: Path, monkeypatch: pytest.MonkeyPatch

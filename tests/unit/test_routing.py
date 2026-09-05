@@ -73,13 +73,20 @@ class TestRouter:
             router.set_status(rid, ReplicaStatus.HEALTHY)
         lease = await router.acquire()
         first = lease.replica.id
-        other = router.reroute(lease)
+        other = router.reroute(lease, error="ConnectError: refused")
         assert other.id != first and lease.replica is other
-        assert router.replica(first).failures == 1  # type: ignore[union-attr]
+        abandoned = router.replica(first)
+        assert abandoned is not None and abandoned.failures == 1
+        assert abandoned.inflight_requests == 0 and abandoned.last_error == "ConnectError: refused"
+        assert other.inflight_requests == 1
         with pytest.raises(NoHealthyReplicaError):
             router.reroute(lease)  # nothing left to try
-        router.release(lease, failed=True)
-        assert router.total_errors == 1
+        # A failed reroute leaves the lease untouched: the slot is still on `other`, once.
+        assert lease.replica is other and other.inflight_requests == 1
+        router.release(lease, failed=True, error="HTTP 500")
+        assert router.total_errors == 1 and other.inflight_requests == 0
+        assert other.failures == 1 and other.last_error == "HTTP 500"
+        assert abandoned.inflight_requests == 0, "the abandoned replica must not be charged twice"
 
     async def test_backpressure_queue_and_overload(self) -> None:
         router = ReplicaRouter(max_concurrency=1, max_queue_depth=1)

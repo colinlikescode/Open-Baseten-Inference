@@ -159,6 +159,14 @@ def estimate_memory(
             f"{(total - free) / GIB:.1f} GiB already in use on the most occupied selected GPU; "
             "planning against free memory only"
         )
+    if memory_fraction is not None and budget > free:
+        # A forced fraction is honoured, but it cannot claim memory that is not free.
+        notes.append(
+            f"forced memory fraction {fraction:.2f} claims {format_bytes(budget)} per GPU but only "
+            f"{format_bytes(free)} is free"
+        )
+        fits = False
+        shortfall = max(shortfall, budget - free)
     if fraction < cfg.min_memory_fraction:
         notes.append(
             f"usable memory fraction {fraction:.2f} is below {cfg.min_memory_fraction:.2f}; GPU is heavily occupied"

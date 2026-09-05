@@ -11,7 +11,6 @@ from rich.table import Table
 
 from servepilot.cli.common import (
     AcceleratorsOpt,
-    EngineOpt,
     ExpectedConcurrencyOpt,
     InstanceOpt,
     JSONOpt,
@@ -32,6 +31,21 @@ from servepilot.cli.render import render_hardware, render_model, render_plan, re
 from servepilot.cloud.catalog import PROVIDERS, list_shapes
 from servepilot.cloud.skypilot import LaunchRequest, SkyClient, render_task_yaml, wait_for_endpoint
 from servepilot.exceptions import ConfigurationError
+
+# Only one engine is installed on the rented machines; "auto" means vLLM there.
+LaunchEngineOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--engine",
+        help="vllm | sglang. The machines get only this engine (default: vllm).",
+        rich_help_panel="Basics",
+    ),
+]
+
+
+def _installed_engine(engine: str | None) -> str:
+    """The engine `launch` installs remotely; the local pre-launch plan must use the same one."""
+    return "vllm" if engine in (None, "auto") else engine
 
 
 def _serve_args(
@@ -96,7 +110,7 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
                 "--region", help="Cloud region, like us-east-1.", rich_help_panel="Basics"
             ),
         ] = None,
-        engine: EngineOpt = None,
+        engine: LaunchEngineOpt = None,
         objective: ObjectiveOpt = None,
         profile: ProfileOpt = None,
         expected_concurrency: ExpectedConcurrencyOpt = None,
@@ -189,7 +203,7 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
         try:
             flags = PlanFlags(
                 model=model,
-                engine=engine,
+                engine=_installed_engine(engine),
                 objective=objective,
                 profile=profile,
                 expected_concurrency=expected_concurrency,

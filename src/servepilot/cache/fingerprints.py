@@ -97,6 +97,8 @@ def validate_record(
             reasons.append(f"engine {engine} version changed ({recorded} → {current})")
 
         # Enough free memory: every GPU the plan uses must have at least the engine budget free.
+        # The plan's fraction is authoritative (memory tuning may have raised it after the
+        # static estimate was made).
         plan = record.winner.plan
         est = plan.estimated_memory
         for gpu_id in plan.gpu_ids:
@@ -105,11 +107,12 @@ def validate_record(
             except KeyError:
                 reasons.append(f"GPU {gpu_id} used by the cached plan is not present")
                 continue
-            required = (
-                est.engine_budget_bytes
-                if est is not None
-                else int((plan.memory_fraction or 0.9) * gpu.total_memory_bytes)
-            )
+            if plan.memory_fraction is not None:
+                required = int(plan.memory_fraction * gpu.total_memory_bytes)
+            elif est is not None:
+                required = est.engine_budget_bytes
+            else:
+                required = int(0.9 * gpu.total_memory_bytes)
             if gpu.free_memory_bytes < required:
                 reasons.append(
                     f"GPU {gpu_id} has {format_bytes(gpu.free_memory_bytes)} free but the cached plan needs "

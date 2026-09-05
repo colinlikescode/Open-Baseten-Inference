@@ -252,9 +252,10 @@ class ManagedProcess:
                 )
                 self._signal_group(signal.SIGKILL)
                 await self.wait(timeout=10.0)
-        # Workers may have re-parented; make sure nothing in the group survives.
+        # Workers may have re-parented; make sure nothing in the group survives. Scanning the
+        # process table is synchronous and can take a while on a busy host, so do it off-loop.
         if self._pgid is not None:
-            for pid in _descendant_pids(self._pgid):
+            for pid in await asyncio.to_thread(_descendant_pids, self._pgid):
                 with contextlib.suppress(ProcessLookupError, psutil.Error, PermissionError):
                     psutil.Process(pid).kill()
             _LIVE_PGIDS.discard(self._pgid)

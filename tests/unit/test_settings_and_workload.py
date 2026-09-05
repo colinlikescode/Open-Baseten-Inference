@@ -151,6 +151,12 @@ constraints:
         # A p50 override that would exceed the preset context grows the context automatically.
         grown = build_config(PlanFlags(model="m", input_tokens=4000)).build_workload()
         assert grown.max_context_tokens >= grown.input_tokens_p95 + grown.output_tokens_p95
+        # Context, concurrency and streaming are not part of the token distribution: the preset
+        # name stays.
+        same = build_config(
+            PlanFlags(model="m", context_length=4096, expected_concurrency=8, no_stream=True)
+        ).build_workload()
+        assert same.name == "chat" and same.max_context_tokens == 4096
 
     def test_flag_validation(self) -> None:
         with pytest.raises(ConfigurationError):
@@ -163,6 +169,15 @@ constraints:
             build_config(PlanFlags(model="m", objective="speed"))
         with pytest.raises(ConfigurationError):
             build_config(PlanFlags(model="m", profile="nope"))
+        # An explicit context too small for the requested prompts is a readable error, not a
+        # raw pydantic dump.
+        with pytest.raises(ConfigurationError) as exc:
+            build_config(
+                PlanFlags(model="m", input_tokens=4000, context_length=8192)
+            ).build_workload()
+        assert exc.value.message.startswith("workload profile is invalid:")
+        assert "exceeds max_context_tokens" in exc.value.message
+        assert "Value error" not in exc.value.message and "pydantic" not in exc.value.message
 
 
 class TestPromptGeneration:

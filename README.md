@@ -1,4 +1,4 @@
-# ServePilot
+# Open-Baseten-Inference
 
 Finds the fastest way to serve an LLM on NVIDIA GPUs, then serves it, in your own cloud account.
 

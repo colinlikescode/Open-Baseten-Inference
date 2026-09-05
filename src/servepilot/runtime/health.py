@@ -60,17 +60,26 @@ class HealthChecker:
         self._task: asyncio.Task[None] | None = None
         self._restart_times: dict[int, deque[float]] = {}
         self._restarting: set[int] = set()
+        self._restart_tasks: set[asyncio.Task[None]] = set()
         self.events: list[str] = []
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """Stop probing and abandon pending restarts so none launches an engine mid-shutdown."""
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        pending = list(self._restart_tasks)
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._restarting.clear()  # a task cancelled before it ever ran skips its finally
 
     async def _loop(self) -> None:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -79,6 +88,7 @@ class HealthChecker:
                 await asyncio.sleep(self._interval)
 
     async def check_once(self, client: httpx.AsyncClient) -> None:
+        live: list[Replica] = []
         for replica in list(self._set.replicas):
             if replica.index in self._restarting:
                 continue
@@ -90,11 +100,17 @@ class HealthChecker:
                     replica, f"process exited with code {replica.process.returncode}"
                 )
                 continue
-            ok = await self._probe(client, replica)
+            live.append(replica)
+        # Probes are independent network calls; one hung replica must not delay the others.
+        results = await asyncio.gather(*(self._probe(client, r) for r in live))
+        for replica, ok in zip(live, results, strict=True):
+            state = self._router.replica(replica.id)
+            if state is None:
+                continue
             if ok:
-                if state.status != ReplicaStatus.HEALTHY and state.consecutive_health_failures >= 0:
-                    if state.status == ReplicaStatus.UNHEALTHY:
-                        self._record(f"{replica.id} recovered")
+                if state.status == ReplicaStatus.UNHEALTHY:
+                    self._record(f"{replica.id} recovered")
+                if state.status != ReplicaStatus.HEALTHY:
                     self._router.set_status(replica.id, ReplicaStatus.HEALTHY)
                 state.consecutive_health_failures = 0
             else:
@@ -140,7 +156,9 @@ class HealthChecker:
             return
         times.append(now)
         self._restarting.add(replica.index)
-        asyncio.create_task(self._restart(replica, attempt=len(times)))  # noqa: RUF006 - fire and forget by design
+        task = asyncio.create_task(self._restart(replica, attempt=len(times)))
+        self._restart_tasks.add(task)
+        task.add_done_callback(self._restart_tasks.discard)
 
     async def _restart(self, replica: Replica, attempt: int) -> None:
         delay = self._backoff * (2 ** (attempt - 1))

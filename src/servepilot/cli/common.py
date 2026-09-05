@@ -531,6 +531,10 @@ def build_workspace(flags: PlanFlags, state: CLIState, *, on_engine_line: Any = 
         )
         provider: HardwareProvider = FakeHardwareProvider(hardware)
     else:
+        if flags.ray_address and "RAY_ADDRESS" not in os.environ:
+            # Forwarded into every engine environment so multi-node vLLM (Ray executor) joins
+            # this cluster rather than whichever local Ray instance it finds first.
+            os.environ["RAY_ADDRESS"] = flags.ray_address
         provider = make_hardware_provider(settings, flags.ray_address)
         hardware = provider.snapshot()
     inspector = ModelInspector(token=hf_token())

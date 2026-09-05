@@ -259,6 +259,30 @@ class TestValidation:
             engine_versions={"fake": "0.0.1-fake"},
         )
         assert any("free but the cached plan needs" in r for r in v2.reasons)
+        # Memory tuning raises the plan's fraction after the static estimate was made; the
+        # plan's fraction decides how much free memory a reuse needs.
+        hw = fh.h100x1()
+        total = hw.gpus[0].total_memory_bytes
+        hw.gpus[0].free_memory_bytes = int(0.9 * total) + GIB  # fits the 0.9 plan exactly
+        ok = validate_record(
+            record,
+            hardware=hw,
+            model=dense_8b,
+            workload=chat_workload,
+            engine_versions={"fake": "0.0.1-fake"},
+        )
+        assert not any("cached plan needs" in r for r in ok.reasons)
+        tuned = record.model_copy(deep=True)
+        assert tuned.winner is not None
+        tuned.winner.plan.memory_fraction = 0.95
+        v3 = validate_record(
+            tuned,
+            hardware=hw,
+            model=dense_8b,
+            workload=chat_workload,
+            engine_versions={"fake": "0.0.1-fake"},
+        )
+        assert any("free but the cached plan needs" in r for r in v3.reasons)
 
     def test_incomplete_record(
         self, dense_8b: ModelProfile, chat_workload: WorkloadProfile

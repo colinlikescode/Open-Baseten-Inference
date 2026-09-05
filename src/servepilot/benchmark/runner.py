@@ -73,18 +73,23 @@ class BenchmarkRunner:
         self._api_key = api_key
         self._ignore_eos = ignore_eos
 
-    def requests_for(self, spec: BenchmarkSpec, *, seed_offset: int = 0) -> list[BenchmarkRequest]:
-        return PromptGenerator(self._tok, spec.seed).generate(
-            self._workload, spec.num_requests, seed_offset=seed_offset
+    async def _generate(
+        self, spec: BenchmarkSpec, count: int, seed_offset: int
+    ) -> list[BenchmarkRequest]:
+        """Prompt generation tokenizes every request several times; run it off the event loop
+        so the router (which shares the loop during tuning) keeps serving."""
+        return await asyncio.to_thread(
+            PromptGenerator(self._tok, spec.seed).generate,
+            self._workload,
+            count,
+            seed_offset=seed_offset,
         )
 
     async def warmup(self, client: BenchmarkClient, spec: BenchmarkSpec) -> None:
         """Send warmup requests and require at least one success before measuring."""
         if spec.warmup_requests <= 0:
             return
-        reqs = PromptGenerator(self._tok, spec.seed).generate(
-            self._workload, spec.warmup_requests, seed_offset=10_000
-        )
+        reqs = await self._generate(spec, spec.warmup_requests, 10_000)
         sem = asyncio.Semaphore(max(1, min(spec.concurrency, spec.warmup_requests)))
 
         async def one(r: BenchmarkRequest) -> RequestBenchmarkResult:
@@ -112,7 +117,7 @@ class BenchmarkRunner:
         progress: ProgressCallback | None = None,
         warmup: bool = True,
     ) -> BenchmarkResult:
-        requests = self.requests_for(spec)
+        requests = await self._generate(spec, spec.num_requests, 0)
         async with BenchmarkClient(
             base_url,
             model=model,

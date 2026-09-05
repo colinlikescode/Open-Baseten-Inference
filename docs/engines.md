@@ -18,6 +18,9 @@ process so its own tools (`ninja` for JIT kernels, for example) are found.
 
 `servepilot doctor` shows what was found and which interpreter it will use.
 
+`servepilot launch` installs one engine on the machines it rents: vLLM by default, SGLang
+with `--engine sglang`. The plan it prints before launching only lists that engine.
+
 ## vLLM
 
 Started as `PYTHON -m vllm.entrypoints.openai.api_server --model MODEL ...`. Flags used:

@@ -109,6 +109,19 @@ def resolve_context_length(
     requested = constraints.context_length or workload.max_context_tokens
     limit = model.max_position_embeddings
     if limit is not None and requested > limit and constraints.context_length is None:
+        needed = workload.p95_sequence_tokens
+        if needed > limit:
+            # Benchmark requests at the p95 lengths would be rejected by the engine, so the
+            # measurements could never be valid; say so instead of tuning into failures.
+            raise ConfigurationError(
+                f"the workload needs {needed} tokens of context (p95 prompt + p95 output) but the "
+                f"model's maximum is {limit}.",
+                hints=[
+                    "Lower --input-tokens-p95 / --output-tokens-p95 or pick a shorter profile.",
+                    f"Or force it: --context-length {needed} --allow-context-override "
+                    "(quality beyond the trained length is not guaranteed).",
+                ],
+            )
         notes.append(
             f"workload context {requested} exceeds the model's maximum ({limit}); using {limit}. "
             "Pass --context-length with --allow-context-override to force a longer context."
@@ -425,6 +438,14 @@ def _cross_node_candidates(
     node_ids = sorted(k for k in by_node if k is not None)
     if len(node_ids) < 2:
         return plans
+    if constraints.replica_count not in (None, 1):
+        result.excluded.append(
+            ExcludedCandidate(
+                description="multi-node layouts",
+                reason=f"a replica spanning machines is always a single copy; --replicas {constraints.replica_count} cannot be honoured across nodes",
+            )
+        )
+        return plans
     gpus_per_node = min(len(by_node[n]) for n in node_ids)
     all_gpus = [g for n in node_ids for g in sorted(by_node[n])[:gpus_per_node]]
     pp = len(node_ids)
@@ -441,6 +462,18 @@ def _cross_node_candidates(
         shapes.append(
             (total, 1, "single tensor-parallel group spanning machines (higher communication cost)")
         )
+    if constraints.tensor_parallel_size is not None:
+        wanted = constraints.tensor_parallel_size
+        shapes = [s for s in shapes if s[0] == wanted]
+        if not shapes:
+            result.excluded.append(
+                ExcludedCandidate(
+                    description=f"TP={wanted} multi-node",
+                    reason=f"multi-node layouts on this cluster use TP={tp} per machine or TP={total} across all machines",
+                    tensor_parallel_size=wanted,
+                )
+            )
+            return plans
     for engine in engines:
         if constraints.engine is not None and engine.engine_name != constraints.engine:
             continue
@@ -520,12 +553,12 @@ def _cross_node_candidates(
 def _rank(plans: list[CandidatePlan], objective: Objective) -> None:
     """Heuristic ordering used to decide which structural candidates to benchmark first."""
 
-    def key(p: CandidatePlan) -> tuple[int, int, int, int, str]:
+    def key(p: CandidatePlan) -> tuple[int, int, int, str]:
         variant = 0 if not (p.expert_parallel_enabled or p.dp_attention_enabled) else 1
         if objective == Objective.LATENCY:
             # Larger TP typically lowers per-token latency; try it first.
-            return (-p.tensor_parallel_size, p.pipeline_parallel_size, variant, 0, p.engine.value)
-        return (p.tensor_parallel_size, p.pipeline_parallel_size, variant, 0, p.engine.value)
+            return (-p.tensor_parallel_size, p.pipeline_parallel_size, variant, p.engine.value)
+        return (p.tensor_parallel_size, p.pipeline_parallel_size, variant, p.engine.value)
 
     plans.sort(key=key)
     for i, p in enumerate(plans):

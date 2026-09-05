@@ -142,7 +142,7 @@ class RayProcessHandle:
         self._running = False
         ray = require_ray()
         with contextlib.suppress(Exception):
-            ray.kill(self._actor, no_restart=True)
+            await asyncio.to_thread(ray.kill, self._actor, no_restart=True)  # synchronous RPC
 
 
 async def _await_ref(ref: Any) -> Any:
@@ -166,16 +166,20 @@ class RayLauncher:
         return self._actor_cls
 
     async def launch(self, spec: LaunchSpec) -> ProcessHandle:
-        from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+        def create_actor() -> Any:
+            # Connecting to Ray (on first use) and creating the actor are synchronous RPCs.
+            from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-        cls = self._cls()
-        options: dict[str, Any] = {"name": None}
-        if spec.node_id:
-            options["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
-                node_id=spec.node_id, soft=False
-            )
+            cls = self._cls()
+            options: dict[str, Any] = {"name": None}
+            if spec.node_id:
+                options["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
+                    node_id=spec.node_id, soft=False
+                )
+            return cls.options(**options).remote()
+
         try:
-            actor = cls.options(**options).remote()
+            actor = await asyncio.to_thread(create_actor)
             handle = RayProcessHandle(spec, actor)
             await handle.start()
         except Exception as exc:

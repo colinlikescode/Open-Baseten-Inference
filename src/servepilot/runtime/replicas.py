@@ -191,28 +191,52 @@ class ReplicaSet:
         return True
 
     async def restart_replica(self, replica: Replica) -> Replica:
-        """Replace a dead replica in place (same index/port)."""
+        """Replace a dead replica in place (same index/port).
+
+        When the restart fails, ``replica`` stays in :attr:`replicas` (its process already
+        terminated) with an ``UNHEALTHY`` router entry, so the health checker sees it as dead
+        again and may retry while its restart budget lasts; only the checker moves a replica to
+        ``STOPPED``.
+        """
         if replica.process is not None:
             await replica.process.terminate()
+        restarts = 1
         if self.router is not None:
+            previous = self.router.replica(replica.id)
+            if previous is not None:
+                restarts = previous.restarts + 1
             self.router.remove_replica(replica.id)
-        port = replica.spec.port
-        spec = self.build_spec(replica.index, port)
+        spec = self.build_spec(replica.index, replica.spec.port)
         fresh = Replica(index=replica.index, spec=spec)
         start = time.monotonic()
-        fresh.process = await self.launcher.launch(spec)
+        failure: CandidateFailure | None = None
+        try:
+            fresh.process = await self.launcher.launch(spec)
+        except LaunchError as exc:
+            failure = CandidateFailure(
+                type=FailureType.ENGINE_CRASH, message=exc.message, stage="restart"
+            )
         if self.router is not None:
             state = self.router.add_replica(
-                fresh.id, fresh.base_url, gpu_ids=spec.gpu_ids, pid=fresh.process.pid
+                fresh.id,
+                fresh.base_url,
+                gpu_ids=spec.gpu_ids,
+                pid=fresh.process.pid if fresh.process is not None else None,
             )
             state.status = ReplicaStatus.STARTING
-            state.restarts = 1
-        readiness = await self.engine.wait_until_ready(spec, fresh.process, self.startup_timeout)
-        if not readiness.ready:
-            failure = readiness.failure or CandidateFailure(message="not ready")
-            await fresh.process.terminate()
+            state.restarts = restarts
+        if fresh.process is not None:
+            readiness = await self.engine.wait_until_ready(
+                spec, fresh.process, self.startup_timeout
+            )
+            if readiness.ready:
+                fresh.metadata = dict(readiness.metadata)
+            else:
+                failure = readiness.failure or CandidateFailure(message="not ready")
+                await fresh.process.terminate()
+        if failure is not None:
             if self.router is not None:
-                self.router.set_status(fresh.id, ReplicaStatus.STOPPED, failure.message)
+                self.router.set_status(fresh.id, ReplicaStatus.UNHEALTHY, failure.message)
             raise ReplicaLaunchError(failure, fresh.id)
         fresh.ready = True
         fresh.launch_seconds = time.monotonic() - start

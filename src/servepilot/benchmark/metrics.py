@@ -6,7 +6,7 @@ Definitions (see docs/benchmarking.md):
 * ``output_tokens_per_second`` – successful output tokens / duration (aggregate work, never
   derived from ``1 / mean latency``).
 * ``request_throughput`` – successful requests / duration.
-* Percentiles use nearest-rank interpolation over successful requests only.
+* Percentiles are linearly interpolated over successful requests only.
 """
 
 from __future__ import annotations

@@ -41,7 +41,13 @@ def _shebang_interpreter(script: Path) -> str | None:
         return None
     if not first.startswith(b"#!"):
         return None
-    candidate = first[2:].decode("utf-8", errors="replace").strip().split()[0]
+    tokens = first[2:].decode("utf-8", errors="replace").split()
+    if not tokens:
+        return None
+    candidate = tokens[0]
+    if Path(candidate).name == "env" and len(tokens) > 1:
+        # ``#!/usr/bin/env python3``: the interpreter is whatever PATH resolves next.
+        return shutil.which(tokens[1])
     return candidate if Path(candidate).exists() else None
 
 

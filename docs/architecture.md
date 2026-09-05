@@ -74,3 +74,19 @@ Every engine process runs in its own process group. Shutdown sends SIGTERM to th
 waits, then SIGKILLs anything left. An `atexit` hook does the same if ServePilot itself dies.
 After a benchmark, ServePilot waits for GPU memory to return near the baseline before it
 launches the next candidate.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | success |
+| 1 | unexpected error (re-run with `-vv` for the traceback) |
+| 2 | invalid flags or config file |
+| 3 | environment: no NVML/GPUs, mixed GPU types, missing `sky` |
+| 4 | model could not be inspected (missing, gated, unreadable) |
+| 5 | no usable inference engine |
+| 6 | no layout fits, or every candidate failed |
+| 7 | a launch or runtime failure (engine did not start, deployment already running) |
+| 8 | a benchmark could not run |
+| 9 | tuning cache unreadable or from another schema version |
+| 130 | interrupted with Ctrl-C |

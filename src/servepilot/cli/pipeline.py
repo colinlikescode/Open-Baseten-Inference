@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -21,7 +23,7 @@ from servepilot.cache.fingerprints import (
 from servepilot.cli.common import Workspace, hf_token
 from servepilot.cli.render import summarize_result
 from servepilot.constants import DEFAULT_STARTUP_STAGGER_SECONDS
-from servepilot.exceptions import CacheError
+from servepilot.exceptions import CacheError, NoViablePlanError
 from servepilot.logging import get_logger
 from servepilot.models.tokenizer import load_tokenizer
 from servepilot.planner.explain import explain_plan
@@ -148,7 +150,7 @@ async def run_tune(
     record: TuningRecord | None = None
     if resume:
         try:
-            existing = ws.cache.find(hw_fp, model_fp, wl_fp)
+            existing = await asyncio.to_thread(ws.cache.find, hw_fp, model_fp, wl_fp)
         except CacheError:
             existing = None
         if (
@@ -191,8 +193,12 @@ async def run_tune(
         )
     record.candidates = list(completed)
 
-    tokenizer = load_tokenizer(
-        ws.model, token=hf_token(), trust_remote_code=ws.constraints.trust_remote_code
+    # Tokenizer loading may download from the Hub and parse a large tokenizer.json.
+    tokenizer = await asyncio.to_thread(
+        load_tokenizer,
+        ws.model,
+        token=hf_token(),
+        trust_remote_code=ws.constraints.trust_remote_code,
     )
     if not tokenizer.exact:
         record.notes.append("token counts are approximate: no tokenizer could be loaded")
@@ -212,10 +218,14 @@ async def run_tune(
         verify_gpu_cleanup=verify_gpu_cleanup,
     )
 
-    def persist(evaluation: CandidateEvaluation) -> None:
+    async def save() -> Path:
+        # Serialising the record and fsyncing it must not stall the router or engine log pumps.
+        return await asyncio.to_thread(ws.cache.save, record)
+
+    async def persist(evaluation: CandidateEvaluation) -> None:
         if evaluation not in record.candidates:
             record.candidates.append(evaluation)
-        ws.cache.save(record)
+        await save()
 
     tuner = Tuner(
         evaluator,
@@ -227,9 +237,15 @@ async def run_tune(
     )
     try:
         outcome = await tuner.tune(planning)
+    except NoViablePlanError:
+        # Definitive for this hardware/model/workload: nothing to resume.
+        record.status = "failed"
+        await save()
+        raise
     except BaseException:
+        # Interrupted or crashed part-way: keep finished candidates resumable.
         record.status = "in_progress" if tuner.evaluations else "failed"
-        ws.cache.save(record)
+        await save()
         raise
     finally:
         await ws.launcher.shutdown_all()
@@ -238,7 +254,7 @@ async def run_tune(
     record.candidates = list(outcome.evaluations)
     record.notes.extend(outcome.notes)
     record.status = "complete"
-    path = ws.cache.save(record)
+    path = await save()
     return TuneRun(outcome=outcome, record=record, path=path, notes=outcome.notes)
 
 

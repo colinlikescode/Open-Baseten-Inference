@@ -148,6 +148,11 @@ def test_serve_smoke(engine: str, tmp_path: Path) -> None:
             "0",
             "--context-length",
             "2048",
+            # The chat preset's p95 prompt (2048) + output (768) would not fit this context.
+            "--input-tokens",
+            "64",
+            "--output-tokens",
+            "32",
             "--port",
             str(port),
             "--startup-timeout",

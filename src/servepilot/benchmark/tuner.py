@@ -13,8 +13,9 @@ Failures (OOM, crashes, timeouts) are recorded per candidate and never abort the
 
 from __future__ import annotations
 
+import inspect
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -126,6 +127,11 @@ class TuningOutcome:
     notes: list[str] = field(default_factory=list)
 
 
+# Called after every recorded evaluation (persistence hook). May be a plain function or return an
+# awaitable, so callers can do their disk I/O off the event loop.
+EvaluationCallback = Callable[[CandidateEvaluation], Awaitable[None] | None]
+
+
 class Tuner:
     def __init__(
         self,
@@ -134,7 +140,7 @@ class Tuner:
         settings: TuningSettings | None = None,
         *,
         progress: TuningProgress | None = None,
-        on_evaluation: Callable[[CandidateEvaluation], None] | None = None,
+        on_evaluation: EvaluationCallback | None = None,
         completed: Sequence[CandidateEvaluation] = (),
     ) -> None:
         self._eval = evaluator
@@ -158,10 +164,12 @@ class Tuner:
     def slo(self) -> LatencyConstraints | None:
         return self._workload.latency_constraints
 
-    def _record(self, evaluation: CandidateEvaluation) -> None:
+    async def _record(self, evaluation: CandidateEvaluation) -> None:
         self.evaluations.append(evaluation)
         if self._on_evaluation is not None:
-            self._on_evaluation(evaluation)
+            outcome = self._on_evaluation(evaluation)
+            if inspect.isawaitable(outcome):
+                await outcome
 
     def _spec(self, concurrency: int, requests: int, label: str) -> BenchmarkSpec:
         return make_spec(
@@ -320,7 +328,7 @@ class Tuner:
                 evaluation.status = "failed"
                 evaluation.failure = failure
                 plan.viability = CandidateViability.LAUNCH_FAILED
-                self._record(evaluation)
+                await self._record(evaluation)
                 continue
             evaluation.launch_seconds = session.launch_seconds
             evaluation.engine_version = session.engine_version
@@ -334,13 +342,13 @@ class Tuner:
                 evaluation.status = "failed"
                 evaluation.failure = CandidateFailure(message=str(exc), stage="benchmark")
                 self._progress.candidate_failed(plan, evaluation.failure)
-                self._record(evaluation)
+                await self._record(evaluation)
                 await self._close_session()
                 continue
             evaluation.results.append(result)
             evaluation.status = "benchmarked"
             self._progress.candidate_result(plan, result)
-            self._record(evaluation)
+            await self._record(evaluation)
             benchmarked.append(evaluation)
             # Keep the last session open: stage B often starts with this candidate.
             if plan is not candidates[-1]:
@@ -388,7 +396,7 @@ class Tuner:
             if session is None:
                 evaluation.status = "failed"
                 evaluation.failure = failure
-                self._record(evaluation)
+                await self._record(evaluation)
                 continue
             history: list[BenchmarkResult] = list(structural_eval.results)
             if self.objective == Objective.LATENCY:
@@ -397,8 +405,15 @@ class Tuner:
                 await self._sweep_throughput(session, plan, history, evaluation)
             evaluation.status = "benchmarked" if evaluation.results or history else "failed"
             self._score(history)
-            self._record(evaluation)
+            await self._record(evaluation)
             sweeps.append(evaluation)
+        if not sweeps:
+            # Every top candidate failed to relaunch. Their stage A measurements are still valid
+            # evidence, so select on those instead of aborting; stage D relaunches the winner.
+            self._note_once(
+                "No top candidate could be relaunched for the concurrency sweep; selecting on stage A results."
+            )
+            return ranked
         return sweeps
 
     async def _run_point(
@@ -555,7 +570,7 @@ class Tuner:
         if session is None:
             evaluation.status = "failed"
             evaluation.failure = failure
-            self._record(evaluation)
+            await self._record(evaluation)
             note = f"Memory fraction {new_fraction:.2f} failed to launch ({failure.type.value if failure else 'unknown'}); keeping {plan.memory_fraction:.2f}."
             self._progress.note(note)
             return best, best_result, note
@@ -567,7 +582,7 @@ class Tuner:
             await self._run_point(session, tuned_plan, c, history, evaluation, "memory")
         evaluation.status = "benchmarked" if history else "failed"
         self._score(history)
-        self._record(evaluation)
+        await self._record(evaluation)
         choice = choose_concurrency(history, self.objective, self.slo, self._s.scoring)
         if choice is None:
             return (
@@ -606,7 +621,7 @@ class Tuner:
         if session is None:
             evaluation.status = "failed"
             evaluation.failure = failure
-            self._record(evaluation)
+            await self._record(evaluation)
             self._note_once(
                 "Final confirmation launch failed; using the preliminary measurement as the final result."
             )
@@ -620,7 +635,7 @@ class Tuner:
         except BenchmarkError as exc:
             evaluation.status = "failed"
             evaluation.failure = CandidateFailure(message=str(exc), stage="final")
-            self._record(evaluation)
+            await self._record(evaluation)
             self._note_once(
                 f"Final confirmation benchmark failed ({exc}); using the preliminary measurement."
             )
@@ -629,5 +644,5 @@ class Tuner:
         evaluation.results.append(result)
         evaluation.status = "benchmarked"
         self._progress.candidate_result(plan, result)
-        self._record(evaluation)
+        await self._record(evaluation)
         return evaluation, result

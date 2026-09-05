@@ -50,7 +50,9 @@ For `G` GPUs per machine:
 
 `--tp`, `--replicas`, `--gpus`, `--engine`, `--context-length`, `--max-concurrency`,
 `--memory-fraction` narrow the search. They never skip validation: an impossible combination
-fails with a clear message.
+fails with a clear message. The context is capped at the model's maximum; when even the
+workload's p95 prompt + output would not fit, that is an error too (force it with
+`--context-length N --allow-context-override`).
 
 Mixed GPU models in one machine stop the planner with a list of homogeneous subsets you can
 pick with `--gpus`.

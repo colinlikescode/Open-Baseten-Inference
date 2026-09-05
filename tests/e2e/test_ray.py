@@ -63,6 +63,7 @@ def test_ray_hardware_provider_merges_nodes(ray_cluster: str) -> None:
 
 
 async def test_ray_launcher_runs_fake_engine_and_terminates(ray_cluster: str) -> None:
+    import os
     import sys
 
     from servepilot.cluster.ray_launcher import RayLauncher
@@ -72,6 +73,15 @@ async def test_ray_launcher_runs_fake_engine_and_terminates(ray_cluster: str) ->
         RayHardwareProvider(ray_cluster, node_snapshot_fn=_fake_node_snapshot).snapshot().nodes[0]
     )
     port = PortAllocator(35000, 35999).allocate()
+    # Same minimal environment the fake engine builds; PYTHONPATH keeps a source checkout
+    # importable inside the remote process.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", "/"),
+        "PYTHONUNBUFFERED": "1",
+    }
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
     spec = LaunchSpec(
         executable=sys.executable,
         args=[
@@ -84,11 +94,7 @@ async def test_ray_launcher_runs_fake_engine_and_terminates(ray_cluster: str) ->
             "--tpot-ms",
             "1",
         ],
-        env={
-            "PATH": __import__("os").environ.get("PATH", ""),
-            "HOME": __import__("os").environ.get("HOME", "/"),
-            "PYTHONUNBUFFERED": "1",
-        },
+        env=env,
         host="127.0.0.1",
         port=port,
         gpu_ids=[0],

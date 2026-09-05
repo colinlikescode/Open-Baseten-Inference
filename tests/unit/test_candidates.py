@@ -93,10 +93,20 @@ class TestGeneration:
 
     def test_context_capped_to_model_max(self, chat_workload: WorkloadProfile) -> None:
         gpt2 = profile_from_config("gpt2_small", weight_bytes=500 * 1024 * 1024)
-        wl = workload_from_preset("chat")  # 8192 context > gpt2's 1024
-        result = generate_candidates(fh.h100x1(), gpt2, wl, _engines())
+        short = WorkloadProfile(
+            input_tokens_p50=128,
+            input_tokens_p95=512,
+            output_tokens_p50=64,
+            output_tokens_p95=256,
+            max_context_tokens=8192,  # > gpt2's 1024, but the p95 sequence (768) still fits
+        )
+        result = generate_candidates(fh.h100x1(), gpt2, short, _engines())
         assert result.candidates[0].context_length == 1024
         assert any("exceeds the model's maximum" in n for n in result.notes)
+        # The chat preset's p95 sequence (2048 + 768) cannot fit in 1024 tokens: every tail
+        # request would be rejected, so this is a configuration error rather than a doomed tune.
+        with pytest.raises(ConfigurationError, match=r"needs 2816 tokens .* maximum is 1024"):
+            generate_candidates(fh.h100x1(), gpt2, chat_workload, _engines())
 
     def test_explicit_context_beyond_model_requires_override(
         self, dense_8b: ModelProfile, chat_workload: WorkloadProfile
@@ -236,6 +246,15 @@ class TestOverrides:
             fh.h100x1(), dense_32b, chat_workload, _engines(), PlanConstraints(memory_fraction=0.9)
         )
         assert forced.candidates[0].memory_fraction == pytest.approx(0.9)
+        # A forced fraction cannot claim memory another process already holds (GPU 1: 30 GiB used).
+        with pytest.raises(NoViablePlanError, match=r"claims .* but only .* is free"):
+            generate_candidates(
+                fh.partially_occupied_x4().select([1]),
+                dense_32b,
+                chat_workload,
+                _engines(),
+                PlanConstraints(memory_fraction=0.9, allow_busy_gpus=True),
+            )
 
 
 class TestHardwareEdgeCases:
@@ -320,6 +339,26 @@ class TestCluster:
 
         with pytest.raises(NoViablePlanError):
             generate_candidates(fh.cluster(2, 4), huge, chat_workload, [NoRay()])
+
+    def test_cross_node_honours_tp_and_replicas(self, chat_workload: WorkloadProfile) -> None:
+        huge = profile_from_config("llama3_70b", weight_bytes=int(400 * GIB))
+        cluster = fh.cluster(2, 4)
+        spanning = generate_candidates(
+            cluster, huge, chat_workload, _engines(), PlanConstraints(tensor_parallel_size=8)
+        )
+        assert [p.id for p in spanning.candidates] == ["fake-tp8-x1-ray"]
+        per_node = generate_candidates(
+            cluster, huge, chat_workload, _engines(), PlanConstraints(tensor_parallel_size=4)
+        )
+        assert [p.id for p in per_node.candidates] == ["fake-tp4-pp2-x1-ray"]
+        with pytest.raises(NoViablePlanError, match="TP=4 per machine or TP=8"):
+            generate_candidates(
+                cluster, huge, chat_workload, _engines(), PlanConstraints(tensor_parallel_size=2)
+            )
+        with pytest.raises(NoViablePlanError, match="single copy"):
+            generate_candidates(
+                cluster, huge, chat_workload, _engines(), PlanConstraints(replica_count=2)
+            )
 
 
 class TestPlannerFacade:

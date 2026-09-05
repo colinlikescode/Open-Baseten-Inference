@@ -219,6 +219,38 @@ class TestFailures:
             await Tuner(evaluator, wl, SETTINGS).tune(planning(dense_8b, wl))
         assert "Every candidate failed" in exc.value.message
 
+    async def test_relaunch_failure_falls_back_to_stage_a_evidence(
+        self, dense_8b: ModelProfile
+    ) -> None:
+        wl = workload_from_preset("chat")
+
+        class RelaunchFailing(ScriptedEvaluator):
+            """Every plan launches once; any relaunch fails (e.g. GPU memory not yet released)."""
+
+            async def open(self, plan: CandidatePlan) -> ScriptedSession:
+                if plan.id in self.opens:
+                    raise CandidateLaunchFailed(
+                        CandidateFailure(type=FailureType.OOM, message="relaunch OOM")
+                    )
+                return await super().open(plan)
+
+        evaluator = RelaunchFailing(
+            {"tp1": saturating(1000, 64), "tp2": saturating(800, 64), "tp4": saturating(500, 64)}
+        )
+        settings = TuningSettings(
+            stage_a_requests=8, sweep_requests=8, final_multiplier=1, memory_tuning=False, top_k=1
+        )
+        # tp4 is benchmarked last and stays open; tp1 (the best) must be relaunched and fails.
+        outcome = await Tuner(evaluator, wl, settings).tune(planning(dense_8b, wl))
+        winner = outcome.winner
+        assert winner.plan.tensor_parallel_size == 1 and winner.benchmarked
+        assert winner.final_result is not None and winner.final_result.spec.label == "stage-a"
+        assert winner.plan.max_concurrency == winner.final_result.spec.concurrency
+        assert any("selecting on stage A results" in n for n in outcome.notes)
+        assert any("Final confirmation launch failed" in n for n in outcome.notes)
+        failed = [e for e in outcome.evaluations if e.status == "failed"]
+        assert {e.stage for e in failed} == {"concurrency", "final"}
+
     async def test_error_rate_makes_candidate_ineligible(self, dense_8b: ModelProfile) -> None:
         wl = workload_from_preset("chat")
 

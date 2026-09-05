@@ -14,13 +14,11 @@ def divisors(n: int) -> list[int]:
 
 
 def check_tp_divisibility(model: ModelProfile, tp: int) -> str | None:
+    """Plain TP only needs the attention heads to split; expert counts are checked by
+    :func:`check_ep_divisibility` when an expert-parallel variant is proposed."""
     heads = model.num_attention_heads
     if heads is not None and heads % tp != 0:
         return f"{heads} attention heads are not divisible by TP={tp}"
-    if model.is_moe and model.num_experts is not None and tp > 1 and model.num_experts % tp != 0:
-        # Expert parallel sizes must divide the expert count; plain TP shards experts too in
-        # most engines, so warn via prune only when EP is implied (handled by caller).
-        return None
     return None
 
 
@@ -48,6 +46,11 @@ def check_memory(estimate: MemoryEstimate, tolerance_fraction: float = 0.0) -> s
     budget = estimate.engine_budget_bytes
     if estimate.shortfall_bytes <= tolerance_fraction * budget:
         return None
+    if budget > estimate.device_free_bytes:
+        return (
+            f"memory fraction {estimate.memory_fraction:.2f} claims {format_bytes(budget)} per GPU "
+            f"but only {format_bytes(estimate.device_free_bytes)} is free"
+        )
     parts = [
         f"estimated per-GPU requirement exceeds the safe budget by {format_bytes(estimate.shortfall_bytes)}",
         f"(weights {format_bytes(estimate.weights_bytes)} + overheads {format_bytes(estimate.fixed_bytes - (estimate.weights_bytes or 0))}",
