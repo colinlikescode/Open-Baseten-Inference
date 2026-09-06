@@ -230,6 +230,11 @@ def test_cli_tune_then_serve_uses_cache(tmp_path: Path) -> None:
     behavior.write_text(json.dumps({"base_tpot_ms": 1.0, "base_ttft_ms": 2.0, "base_capacity": 8}))
     env = _env(tmp_path, behavior=behavior)
     cfg = _config(tmp_path, model_dir)
+    # A forced engine budget must remain fixed even when memory tuning is enabled.
+    cfg.write_text(
+        cfg.read_text().replace("memory_tuning: false", "memory_tuning: true")
+        + "constraints:\n  memory_fraction: 0.8\n"
+    )
 
     tune = subprocess.run(
         [
@@ -252,6 +257,8 @@ def test_cli_tune_then_serve_uses_cache(tmp_path: Path) -> None:
     assert tune.returncode == 0, tune.stderr[-4000:]
     record = json.loads(tune.stdout)
     assert record["status"] == "complete" and record["winner"]["benchmarked"] is True
+    assert record["winner"]["plan"]["memory_fraction"] == 0.8
+    assert all(candidate["stage"] != "memory" for candidate in record["candidates"])
     assert (tmp_path / "out.json").exists()
     assert "Pareto" in tune.stderr
     cache_files = list((tmp_path / "cache" / "tuning").glob("*.json"))
@@ -288,6 +295,28 @@ def test_cli_tune_then_serve_uses_cache(tmp_path: Path) -> None:
     assert payload["selected"]["source"] == "cached"
     assert "Using cached tuning result" in dry.stderr
 
+    capped = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "servepilot",
+            "serve",
+            "--config",
+            str(cfg),
+            "--max-concurrency",
+            "4",
+            "--dry-run",
+            "--json",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert capped.returncode == 0, capped.stderr[-4000:]
+    selection = json.loads(capped.stdout)["selected"]
+    assert selection["source"] == "heuristic" and selection["plan"]["max_num_seqs"] == 4
+
     # A different workload must not reuse the cached plan.
     other = subprocess.run(
         [
@@ -306,7 +335,6 @@ def test_cli_tune_then_serve_uses_cache(tmp_path: Path) -> None:
             "--output-tokens",
             "8",
             "--dry-run",
-            "--no-tune",
             "--json",
         ],
         env=env,

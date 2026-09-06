@@ -14,7 +14,9 @@ to two smaller copies by 30%, and no spec sheet will tell you which. ServePilot 
 of guessing, on your GPUs, in your account.
 
 ```bash
-pip install servepilot        # plus: pip install vllm   and/or   pip install "sglang[all]"
+git clone https://github.com/colinlikescode/Open-Baseten-Inference.git
+cd Open-Baseten-Inference
+pip install -e .             # plus: pip install vllm   and/or   pip install "sglang[all]"
 servepilot serve Qwen/Qwen3-32B
 ```
 
@@ -26,7 +28,7 @@ servepilot serve Qwen/Qwen3-32B --profile long-context --gpus 0,1,2,3 --engine s
 
 # in your own GCP / Azure / AWS account (billed to you). Credentials must already be set up:
 # gcloud auth, az login, or aws configure. `sky check` confirms SkyPilot can see them.
-pip install "servepilot[cloud]" && sky check
+pip install -e ".[cloud]" && sky check
 servepilot launch Qwen/Qwen3-32B --cloud gcp --accelerators H100:8
 servepilot launch Qwen/Qwen3-235B-A22B --cloud aws --instance p5.48xlarge --nodes 2
 servepilot down servepilot-qwen3-32b
@@ -34,6 +36,11 @@ servepilot down servepilot-qwen3-32b
 # what would fit on a machine you have not rented yet (no GPUs or credentials needed)
 servepilot plan Qwen/Qwen3-235B-A22B --cloud azure --instance Standard_ND96isr_H100_v5 --nodes 2
 ```
+
+Cloud launches from this checkout build and upload a wheel of the current code, including local
+fixes. Only the wheel is uploaded. Use `--package /path/to/servepilot.whl` or `--package
+git+https://...@COMMIT` to deploy a specific build. `--dry-run` prepares the package and task
+without renting machines. ServePilot is currently installed from source, not PyPI.
 
 ## Commands
 
@@ -53,7 +60,8 @@ Every command takes `--json`. `-v` shows progress, `-vv` shows engine logs.
 
 [how it works](docs/architecture.md) · [planner](docs/planner.md) ·
 [benchmarking](docs/benchmarking.md) · [engines](docs/engines.md) ·
-[config file](servepilot.example.yaml) · [security](SECURITY.md)
+[GPU validation results](docs/validation.md) · [config file](servepilot.example.yaml) ·
+[security](SECURITY.md)
 
 Needs Linux, NVIDIA drivers, Python 3.11+. Tests and planning run anywhere:
 `pip install -e ".[dev]" && pytest`. Apache 2.0.

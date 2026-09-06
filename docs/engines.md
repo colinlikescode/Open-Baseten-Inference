@@ -20,6 +20,17 @@ process so its own tools (`ninja` for JIT kernels, for example) are found.
 
 `servepilot launch` installs one engine on the machines it rents: vLLM by default, SGLang
 with `--engine sglang`. The plan it prints before launching only lists that engine.
+When launched from a source checkout, ServePilot builds its own wheel and uploads that exact
+code to the machines. `--package` selects a local wheel or another pip requirement. Installations
+without a checkout use the public Git repository's `main` branch by default; pin a commit with
+`--package` when reproducing a deployment.
+
+If a launch command is interrupted, the VM and job may still be running. Check
+`sky status NAME --refresh` and `sky logs NAME` before retrying; reuse `--name NAME` to resume
+the same cluster. The launcher only reports a serving endpoint after its `/health` check
+succeeds. If health works inside the VM but the external address times out, check the cluster's
+firewall rule for TCP 8000: an interrupted SkyPilot provisioning step can leave it unapplied.
+`servepilot down NAME` tears down that cluster when it is no longer needed.
 
 ## vLLM
 

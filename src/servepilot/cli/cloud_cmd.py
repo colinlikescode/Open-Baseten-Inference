@@ -29,6 +29,7 @@ from servepilot.cli.common import (
 from servepilot.cli.pipeline import run_plan
 from servepilot.cli.render import render_hardware, render_model, render_plan, render_workload
 from servepilot.cloud.catalog import PROVIDERS, list_shapes
+from servepilot.cloud.package import prepare_package
 from servepilot.cloud.skypilot import LaunchRequest, SkyClient, render_task_yaml, wait_for_endpoint
 from servepilot.exceptions import ConfigurationError
 
@@ -143,7 +144,7 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
             str | None,
             typer.Option(
                 "--package",
-                help="pip spec for ServePilot on the nodes (default: this version from PyPI).",
+                help="Wheel file or pip requirement for the nodes (default: build and upload this checkout).",
                 rich_help_panel="Advanced",
             ),
         ] = None,
@@ -228,15 +229,16 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
             console.print(f"[yellow]![/] {planning_note}")
             planning = None
 
-        task_yaml = render_task_yaml(request, redact=True)
         task_dir = state.settings.cache_dir / "skypilot"
         task_dir.mkdir(parents=True, exist_ok=True)
+        request.package, request.file_mounts = prepare_package(package, task_dir)
+        task_yaml = render_task_yaml(request, redact=True)
         task_path = task_dir / f"{request.name}.yaml"
         task_path.write_text(render_task_yaml(request), encoding="utf-8")
         task_path.chmod(0o600)
 
         client = SkyClient(
-            on_output=lambda line: console.print(f"[dim]{line}[/]", markup=False, highlight=False)
+            on_output=lambda line: console.print(line, style="dim", markup=False, highlight=False)
         )
         launch_cmd = " ".join(
             shlex.quote(c)
@@ -295,6 +297,9 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
             )
             console.print(f"  follow along: sky logs {request.name}")
             console.print(f"  endpoint:     sky status {request.name} --endpoint {request.port}")
+            console.print(
+                f"  if remote /health works, check the cloud firewall allows TCP {request.port}"
+            )
         console.print(f"  tear down:    servepilot down {request.name}")
 
     @app.command()
@@ -311,7 +316,7 @@ def register(app: typer.Typer, inspect_app: typer.Typer, handle_errors: ErrorHan
         state = get_state(ctx)
         console = state.err_console if json_output else state.console
         client = SkyClient(
-            on_output=lambda line: console.print(f"[dim]{line}[/]", markup=False, highlight=False)
+            on_output=lambda line: console.print(line, style="dim", markup=False, highlight=False)
         )
         client.down(name)
         if json_output:

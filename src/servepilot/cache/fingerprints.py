@@ -14,6 +14,7 @@ from servepilot.models.fingerprint import model_fingerprint
 from servepilot.planner.memory import format_bytes
 from servepilot.schemas.hardware import HardwareSnapshot
 from servepilot.schemas.model import ModelProfile
+from servepilot.schemas.plan import PlanConstraints, PlanningResult
 from servepilot.schemas.runtime import TuningRecord
 from servepilot.schemas.workload import WorkloadProfile
 
@@ -71,6 +72,8 @@ def validate_record(
     workload: WorkloadProfile,
     engine_versions: Mapping[str, str],
     gpu_ids: list[int] | None = None,
+    planning: PlanningResult | None = None,
+    constraints: PlanConstraints | None = None,
 ) -> CacheValidation:
     """Decide whether a cached tuning record can be reused for the current situation."""
     reasons: list[str] = []
@@ -96,10 +99,30 @@ def validate_record(
         elif not engine_versions_compatible(recorded, current):
             reasons.append(f"engine {engine} version changed ({recorded} → {current})")
 
-        # Enough free memory: every GPU the plan uses must have at least the engine budget free.
-        # The plan's fraction is authoritative (memory tuning may have raised it after the
-        # static estimate was made).
         plan = record.winner.plan
+        if planning is not None and not any(
+            candidate.structural_key() == plan.structural_key()
+            and candidate.kv_cache_dtype == plan.kv_cache_dtype
+            and candidate.engine_args == plan.engine_args
+            for candidate in planning.viable
+        ):
+            reasons.append(
+                "cached plan does not match the requested engine, GPU layout, context or engine settings"
+            )
+        if constraints is not None:
+            if (
+                constraints.memory_fraction is not None
+                and plan.memory_fraction != constraints.memory_fraction
+            ):
+                reasons.append("cached plan does not use the requested memory fraction")
+            cap = constraints.max_concurrency
+            if cap is not None and any(
+                value is not None and value > cap
+                for value in (plan.max_num_seqs, plan.max_running_requests)
+            ):
+                reasons.append("cached plan exceeds the requested per-replica concurrency cap")
+        # The final engine budget is authoritative: memory tuning may have raised it after
+        # the static estimate. Every GPU must still have enough free memory for that budget.
         est = plan.estimated_memory
         for gpu_id in plan.gpu_ids:
             try:

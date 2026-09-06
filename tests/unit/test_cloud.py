@@ -208,7 +208,7 @@ class TestSkyClient:
         assert not client.available()
         with pytest.raises(CloudError) as exc:
             client.require()
-        assert "servepilot[cloud]" in exc.value.render()
+        assert 'pip install -e ".[cloud]"' in exc.value.render()
 
     def test_operations(self, fake_sky: Path, tmp_path: Path) -> None:
         seen: list[str] = []
@@ -237,6 +237,8 @@ class TestSkyClient:
         with pytest.raises(CloudError) as exc:
             SkyClient().launch(task, "c")
         assert "sky check" in exc.value.render()
+        assert "sky status c --refresh" in exc.value.render()
+        assert "reuse --name c" in exc.value.render()
 
     def test_wait_for_endpoint(self, fake_sky: Path) -> None:
         client = SkyClient()
@@ -254,8 +256,24 @@ class TestSkyClient:
             wait_for_endpoint(
                 client, "c", 8000, timeout_seconds=0.05, poll_seconds=0.01, probe=lambda u: False
             )
-            == "http://203.0.113.10:8000"
+            is None
         )
+
+    def test_endpoint_address_does_not_imply_readiness(self, fake_sky: Path) -> None:
+        messages: list[str] = []
+        assert (
+            wait_for_endpoint(
+                SkyClient(),
+                "c",
+                8000,
+                timeout_seconds=0.03,
+                poll_seconds=0.01,
+                probe=lambda url: False,
+                on_progress=messages.append,
+            )
+            is None
+        )
+        assert messages and all("not ready yet" in message for message in messages)
 
 
 @pytest.fixture

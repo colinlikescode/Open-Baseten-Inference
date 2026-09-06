@@ -81,6 +81,8 @@ def lookup_cache(ws: Workspace, planning: PlanningResult) -> CacheLookup:
         workload=ws.workload,
         engine_versions=ws.registry.versions(),
         gpu_ids=planning.selected_gpu_ids,
+        planning=planning,
+        constraints=ws.constraints,
     )
     return CacheLookup(record, validation, key)
 
@@ -131,7 +133,7 @@ def tuning_settings(ws: Workspace) -> TuningSettings:
         stage_a_requests=t.stage_a_requests,
         sweep_requests=t.sweep_requests,
         final_multiplier=t.final_multiplier,
-        memory_tuning=t.memory_tuning,
+        memory_tuning=t.memory_tuning and ws.constraints.memory_fraction is None,
         seed=t.seed,
     )
 
@@ -146,6 +148,7 @@ async def run_tune(
 ) -> TuneRun:
     hw_fp, model_fp, wl_fp = fingerprints(ws, planning)
     settings = tuning_settings(ws)
+    versions = ws.registry.versions()
     completed: list[CandidateEvaluation] = []
     record: TuningRecord | None = None
     if resume:
@@ -161,9 +164,13 @@ async def run_tune(
             completed = [
                 e
                 for e in existing.candidates
-                if e.stage == "structural" and e.status == "benchmarked"
+                if e.stage == "structural"
+                and e.status == "benchmarked"
+                and e.engine_version is not None
+                and e.engine_version == versions.get(e.plan.engine.value)
             ]
             record = existing
+            record.engine_versions = versions
             console.print(
                 f"Resuming interrupted tuning run with {len(completed)} completed structural candidate(s)."
             )
@@ -173,7 +180,7 @@ async def run_tune(
             hardware_fingerprint=hw_fp,
             model_fingerprint=model_fp,
             workload_fingerprint=wl_fp,
-            engine_versions=ws.registry.versions(),
+            engine_versions=versions,
             hardware_snapshot=ws.hardware,
             model_profile=ws.model,
             workload_profile=ws.workload,

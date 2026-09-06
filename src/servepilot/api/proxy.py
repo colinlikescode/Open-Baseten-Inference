@@ -114,7 +114,7 @@ async def _send_with_retry(
             upstream = await ctx.http.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
             error = f"{type(exc).__name__}: {exc}"
-            log.warning("replica %s failed before responding: %s", replica.id, exc)
+            log.warning("replica %s failed before responding: %s", replica.id, error)
         else:
             if upstream.status_code < 500:
                 return upstream, None
@@ -197,7 +197,7 @@ async def proxy_generation(request: Request, ctx: ServingContext, endpoint: str)
                 log.warning(
                     "replica %s dropped the connection mid-response: %s",
                     active_lease.replica.id,
-                    exc,
+                    error,
                 )
                 metrics.request_errors_total.labels(
                     endpoint=endpoint, reason="backend_disconnect"

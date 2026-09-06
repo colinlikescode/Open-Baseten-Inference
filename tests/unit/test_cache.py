@@ -20,7 +20,14 @@ from servepilot.exceptions import CacheError
 from servepilot.fsutil import atomic_write_json
 from servepilot.schemas.benchmark import BenchmarkResult, BenchmarkSpec
 from servepilot.schemas.model import ModelProfile
-from servepilot.schemas.plan import CandidateEvaluation, CandidatePlan, EngineName, SelectedPlan
+from servepilot.schemas.plan import (
+    CandidateEvaluation,
+    CandidatePlan,
+    EngineName,
+    PlanConstraints,
+    PlanningResult,
+    SelectedPlan,
+)
 from servepilot.schemas.runtime import TuningRecord
 from servepilot.schemas.workload import (
     LatencyConstraints,
@@ -186,6 +193,75 @@ class TestStore:
 
 
 class TestValidation:
+    @pytest.mark.parametrize(
+        ("constraints", "expected_valid"),
+        [
+            (PlanConstraints(max_concurrency=32), False),
+            (PlanConstraints(max_concurrency=128), True),
+            (PlanConstraints(memory_fraction=0.8), False),
+            (PlanConstraints(memory_fraction=0.9), True),
+        ],
+    )
+    def test_explicit_memory_and_concurrency_constraints(
+        self,
+        dense_8b: ModelProfile,
+        chat_workload: WorkloadProfile,
+        constraints: PlanConstraints,
+        expected_valid: bool,
+    ) -> None:
+        validation = validate_record(
+            make_record(dense_8b, chat_workload),
+            hardware=fh.h100x1(),
+            model=dense_8b,
+            workload=chat_workload,
+            engine_versions={"fake": "0.0.1-fake"},
+            constraints=constraints,
+        )
+        assert validation.valid is expected_valid, validation.reasons
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"engine": EngineName.SGLANG},
+            {"tensor_parallel_size": 2, "gpu_groups": [[0, 1]]},
+            {"replica_count": 2, "gpu_groups": [[0], [1]]},
+            {"context_length": 4096},
+            {"kv_cache_dtype": "fp8"},
+            {"engine_args": {"seed": 7}},
+        ],
+    )
+    def test_current_plan_overrides_cached_winner(
+        self, dense_8b: ModelProfile, chat_workload: WorkloadProfile, changes: dict
+    ) -> None:
+        record = make_record(dense_8b, chat_workload)
+        requested = make_plan().with_updates(**changes)
+        validation = validate_record(
+            record,
+            hardware=fh.h100x1(),
+            model=dense_8b,
+            workload=chat_workload,
+            engine_versions={"fake": "0.0.1-fake"},
+            planning=PlanningResult(candidates=[requested]),
+        )
+        assert not validation.valid and any("requested engine" in r for r in validation.reasons)
+
+    def test_tuned_memory_and_concurrency_remain_reusable(
+        self, dense_8b: ModelProfile, chat_workload: WorkloadProfile
+    ) -> None:
+        record = make_record(dense_8b, chat_workload)
+        assert record.winner is not None
+        record.winner.plan.memory_fraction = 0.94
+        record.winner.plan.max_concurrency = 48
+        validation = validate_record(
+            record,
+            hardware=fh.h100x1(),
+            model=dense_8b,
+            workload=chat_workload,
+            engine_versions={"fake": "0.0.1-fake"},
+            planning=PlanningResult(candidates=[make_plan()]),
+        )
+        assert validation.valid, validation.reasons
+
     def test_valid_record(self, dense_8b: ModelProfile, chat_workload: WorkloadProfile) -> None:
         record = make_record(dense_8b, chat_workload)
         v = validate_record(

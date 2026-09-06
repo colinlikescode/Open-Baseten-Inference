@@ -35,6 +35,7 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture(scope="module")
 def ray_cluster() -> Iterator[str]:
     ray.init(
+        address="local",
         num_cpus=4,
         num_gpus=2,
         include_dashboard=False,

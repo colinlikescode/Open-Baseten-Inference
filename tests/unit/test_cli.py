@@ -148,6 +148,19 @@ def test_serve_dry_run_with_no_tune(fake_env: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Dry run" in result.stdout and "UNBENCHMARKED" in result.stdout
     assert "fake_openai" in result.stdout
+
+
+def test_serve_dry_run_never_launches_tuning(
+    fake_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def forbidden_launch(*args, **kwargs):
+        raise AssertionError("dry-run must not launch any engine process")
+
+    monkeypatch.setattr("servepilot.engines.process.LocalLauncher.launch", forbidden_launch)
+    result = runner.invoke(app, ["serve", str(fake_env), "--engine", "fake", "--dry-run", "--json"])
+    assert result.exit_code == 0, result.output
+    selected = json.loads(result.stdout)["selected"]
+    assert selected["source"] == "heuristic" and selected["benchmarked"] is False
     as_json = runner.invoke(
         app, ["serve", str(fake_env), "--engine", "fake", "--no-tune", "--dry-run", "--json"]
     )

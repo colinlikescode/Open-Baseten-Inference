@@ -309,9 +309,14 @@ class Tuner:
     async def _stage_a(self, candidates: list[CandidatePlan]) -> list[CandidateEvaluation]:
         self._progress.stage("A", f"structural topology search over {len(candidates)} candidate(s)")
         benchmarked: list[CandidateEvaluation] = []
+        diagnostics = {"estimated_memory", "rationale", "viability", "heuristic_rank"}
         for plan in candidates:
-            if plan.id in self._completed:
-                prior = self._completed[plan.id]
+            prior = self._completed.get(plan.id)
+            # IDs describe topology; memory budgets and engine arguments can change without
+            # changing an ID. Resume only measurements of the same launch configuration.
+            if prior is not None and prior.plan.model_dump(exclude=diagnostics) == plan.model_dump(
+                exclude=diagnostics
+            ):
                 self._progress.note(
                     f"reusing completed result for {plan.label()} from interrupted run"
                 )

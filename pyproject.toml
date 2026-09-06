@@ -67,9 +67,9 @@ dev = [
 servepilot = "servepilot.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/servepilot/servepilot"
-Documentation = "https://github.com/servepilot/servepilot/tree/main/docs"
-Issues = "https://github.com/servepilot/servepilot/issues"
+Homepage = "https://github.com/colinlikescode/Open-Baseten-Inference"
+Documentation = "https://github.com/colinlikescode/Open-Baseten-Inference/tree/main/docs"
+Issues = "https://github.com/colinlikescode/Open-Baseten-Inference/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/servepilot"]

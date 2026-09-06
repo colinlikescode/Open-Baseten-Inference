@@ -500,6 +500,7 @@ def serve(
         no_tune=no_tune,
         resume=resume or ws.config.tuning.resume,
         use_cache=ws.config.tuning.use_cache,
+        dry_run=dry_run,
     )
     if not selected.equivalent_commands:
         selected.equivalent_commands = equivalent_commands(ws, selected)
@@ -595,6 +596,7 @@ def _select_plan(
     no_tune: bool,
     resume: bool,
     use_cache: bool,
+    dry_run: bool = False,
 ) -> SelectedPlan:
     if no_tune:
         console.print("\n[yellow]--no-tune:[/] serving the heuristic plan without benchmarking.")
@@ -612,6 +614,11 @@ def _select_plan(
             console.print("\nCached tuning result cannot be reused:")
             for reason in lookup.validation.reasons:
                 console.print(f"  - {reason}")
+    if dry_run:
+        console.print(
+            "\n[yellow]Dry run:[/] showing the heuristic plan; tuning runs when serving starts."
+        )
+        return Planner.heuristic_selection(planning, ws.workload)
     if not ws.config.tuning.enabled:
         console.print(
             "\n[yellow]tuning disabled in config:[/] serving the heuristic plan without benchmarking."

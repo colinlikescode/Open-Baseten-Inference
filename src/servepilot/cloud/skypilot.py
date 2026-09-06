@@ -28,8 +28,8 @@ from typing import Any
 
 import yaml
 
-from servepilot import __version__
 from servepilot.cloud.catalog import SKYPILOT_PROVIDERS, normalize_provider
+from servepilot.cloud.package import SOURCE_PACKAGE
 from servepilot.constants import ExitCode
 from servepilot.exceptions import ConfigurationError, ServePilotError
 from servepilot.logging import get_logger, redact_secrets
@@ -66,7 +66,8 @@ class LaunchRequest:
     disk_size_gb: int = 512
     port: int = SERVEPILOT_PORT
     serve_args: list[str] = field(default_factory=list)
-    package: str = f"servepilot=={__version__}"
+    package: str = SOURCE_PACKAGE
+    file_mounts: dict[str, str] = field(default_factory=dict)
     hf_token: str | None = None
 
     def __post_init__(self) -> None:
@@ -104,13 +105,17 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 SP_PY="$HOME/servepilot-venv/bin/python"
 ENGINE_PY="$HOME/engines/$SERVEPILOT_ENGINE/bin/python"
-uv venv "$HOME/servepilot-venv" --python 3.12
-uv pip install --python "$SP_PY" "$SERVEPILOT_PACKAGE"
+uv venv "$HOME/servepilot-venv" --python 3.12 --allow-existing
+uv pip install --python "$SP_PY" --reinstall-package servepilot "$SERVEPILOT_PACKAGE"
 # The engine gets its own environment so its CUDA stack never fights with ServePilot's.
-uv venv "$HOME/engines/$SERVEPILOT_ENGINE" --python 3.12
+uv venv "$HOME/engines/$SERVEPILOT_ENGINE" --python 3.12 --allow-existing
 uv pip install --python "$ENGINE_PY" $SERVEPILOT_ENGINE_PACKAGES
-# Every Ray client must match the cluster's version: reuse the engine's Ray when it ships one.
-RAY_SPEC=$("$ENGINE_PY" -c 'import ray; print("ray==" + ray.__version__)' 2>/dev/null || echo "ray>=2.30")
+# vLLM may omit its optional Ray dependency. Its interpreter also needs Ray for multi-node plans.
+if ! "$ENGINE_PY" -c 'import ray' >/dev/null 2>&1; then
+  uv pip install --python "$ENGINE_PY" 'ray>=2.30'
+fi
+# Every Ray client must match the cluster's version.
+RAY_SPEC=$("$ENGINE_PY" -c 'import ray; print("ray==" + ray.__version__)')
 uv pip install --python "$SP_PY" "$RAY_SPEC"
 "$HOME/servepilot-venv/bin/servepilot" doctor --port "$SERVEPILOT_PORT" || true
 """
@@ -179,6 +184,8 @@ def render_task(req: LaunchRequest) -> dict[str, Any]:
     }
     if req.hf_token:
         task["secrets"] = {"HF_TOKEN": req.hf_token}
+    if req.file_mounts:
+        task["file_mounts"] = req.file_mounts
     return task
 
 
@@ -228,7 +235,7 @@ class SkyClient:
             raise CloudError(
                 "SkyPilot's `sky` command was not found.",
                 hints=[
-                    'pip install "servepilot[cloud]"   (installs SkyPilot with AWS, GCP and Azure support)',
+                    'pip install -e ".[cloud]" from the checkout (installs SkyPilot for AWS, GCP and Azure)',
                     "then run `sky check` to confirm your cloud credentials",
                 ],
             )
@@ -278,6 +285,8 @@ class SkyClient:
             raise CloudError(
                 f"`sky launch` failed with exit code {result.returncode}.",
                 hints=[
+                    f"The cluster may already exist. Check `sky status {name} --refresh` before retrying.",
+                    f"Inspect provisioning with `sky logs --provision {name}`; reuse --name {name} to resume.",
                     "Run `sky check` to verify credentials for this cloud.",
                     "Check quota and availability for the requested instance type/region.",
                     f"Inspect the task file: {task_path}",
@@ -333,7 +342,7 @@ def wait_for_endpoint(
     probe: Callable[[str], bool] | None = None,
     on_progress: OutputCallback | None = None,
 ) -> str | None:
-    """Poll ``sky status --endpoint`` and then ``/health`` until ServePilot answers, or time out."""
+    """Return an endpoint only after ``/health`` succeeds; return None on timeout."""
     import httpx
 
     def default_probe(url: str) -> bool:
@@ -357,4 +366,4 @@ def wait_for_endpoint(
                 + "` shows progress"
             )
         time.sleep(poll_seconds)
-    return url
+    return None

@@ -123,12 +123,17 @@ def test_plan_real_hardware(tmp_path: Path) -> None:
 
 @skip_no_gpu
 @skip_no_engine
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("engine", ENGINES)
 def test_serve_smoke(engine: str, tmp_path: Path) -> None:
     """Launch one replica with a real engine, talk to it through ServePilot, stop it, verify cleanup."""
     env = _env(tmp_path)
     port = ephemeral_port()
     baseline = _gpu_memory_used_mib()
+    # Engine startup logs can exceed a pipe's capacity before the health check succeeds.
+    # A file keeps draining output and preserves diagnostics on assertion failures.
+    log_path = tmp_path / f"{engine}-serve.log"
+    output_log = log_path.open("w")
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -159,12 +164,11 @@ def test_serve_smoke(engine: str, tmp_path: Path) -> None:
             "900",
         ],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=output_log,
         stderr=subprocess.STDOUT,
         text=True,
     )
     base = f"http://127.0.0.1:{port}"
-    output = ""
     try:
         deadline = time.time() + 900
         ready = False
@@ -176,9 +180,7 @@ def test_serve_smoke(engine: str, tmp_path: Path) -> None:
             except httpx.HTTPError:
                 time.sleep(1)
         if not ready:
-            proc.kill()
-            output = proc.stdout.read() if proc.stdout else ""
-        assert ready, output[-6000:]
+            raise AssertionError(log_path.read_text()[-6000:])
         models = httpx.get(f"{base}/v1/models", timeout=10).json()
         assert models["data"][0]["id"] == SMOKE_MODEL
         chat = httpx.post(
@@ -225,6 +227,8 @@ def test_serve_smoke(engine: str, tmp_path: Path) -> None:
                 proc.wait(timeout=120)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=30)
+        output_log.close()
     time.sleep(5)
     after = _gpu_memory_used_mib()
     assert after[0] <= baseline[0] + 1024, (
@@ -234,6 +238,7 @@ def test_serve_smoke(engine: str, tmp_path: Path) -> None:
 
 @skip_no_gpu
 @skip_no_engine
+@pytest.mark.timeout(3720)
 def test_tune_real_engine(tmp_path: Path) -> None:
     """Full tuning loop on real hardware with the first available engine (small request counts)."""
     engine = ENGINES[0]

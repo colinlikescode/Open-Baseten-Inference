@@ -38,7 +38,7 @@ def explain_plan(
     viable = result.viable
     if len(viable) > 1:
         lines.append(
-            f"{len(result.selected_gpu_ids)} GPUs are selected, so ServePilot will evaluate:"
+            f"{len(result.selected_gpu_ids)} GPUs are selected. Viable layouts for benchmarking:"
         )
         for i, p in enumerate(viable):
             lines.append(f"  {chr(ord('A') + i) if i < 26 else i}. {p.label()}")

@@ -62,7 +62,8 @@ the best valid result wins and the output says so.
 
 ## Stages
 
-**A. Structural search.** Every viable layout, one at a time, benchmarked at half its
+**A. Structural search.** Viable layouts in heuristic order, up to
+`tuning.max_structural_candidates` (default 6), one at a time, benchmarked at half their
 estimated capacity (at least 8, at most 256, at least 2 per replica), or at
 `--expected-concurrency` when given. Latency runs use `--expected-concurrency` (default 16,
 reported as an assumption when you did not set it).
@@ -81,7 +82,7 @@ wins. This is the "plateau rule". Thresholds are constants.
 
 **C. Memory tuning.** Raise the engine memory fraction by 0.04 (never into the last 1 GiB of
 free memory). Keep it if it launches and improves the score by at least 2%. An OOM here is
-recorded and the previous fraction stays.
+recorded and the previous fraction stays. A forced `--memory-fraction` disables this stage.
 
 **D. Confirmation.** Re-benchmark the winner at its operating point with 4× the sweep sample.
 Those are the numbers that get saved and shown.
@@ -103,3 +104,11 @@ spec and result per candidate, every failure with its log tail, engine versions,
 ServePilot version, the Pareto front of (throughput, p95 latency) points, the rationale, and
 the exact engine commands for the winner. `servepilot cache show KEY` prints it;
 `servepilot tune -o file.json` writes it.
+
+Cache reuse also checks the requested engine, GPU layout, context, engine arguments, KV-cache
+dtype, forced memory fraction, and per-replica concurrency cap. `serve --dry-run` uses a
+compatible cached result or shows a heuristic plan without launching engines.
+
+`tune --resume` reuses completed structural measurements only when the launch configuration
+and engine version still match. Changing an engine argument or memory budget remeasures the
+affected layout, even if its topology ID is unchanged.

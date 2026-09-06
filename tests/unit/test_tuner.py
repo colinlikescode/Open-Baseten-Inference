@@ -341,6 +341,16 @@ class TestSLOAndSweep:
         await Tuner(evaluator2, wl, SETTINGS, completed=completed).tune(planning(dense_8b, wl))
         assert not any(label == "stage-a" for _, _, label in evaluator2.benchmarks)
 
+        changed = planning(dense_8b, wl)
+        changed.candidates[0].memory_fraction = 0.75
+        changed.candidates[0].engine_args = {"seed": 7}
+        evaluator3 = ScriptedEvaluator(
+            {"tp1": saturating(1000, 64), "tp2": saturating(800, 64), "tp4": saturating(500, 64)}
+        )
+        await Tuner(evaluator3, wl, SETTINGS, completed=completed).tune(changed)
+        rerun = [cid for cid, _, label in evaluator3.benchmarks if label == "stage-a"]
+        assert rerun == [changed.candidates[0].id]
+
     async def test_progress_and_persistence_callbacks(self, dense_8b: ModelProfile) -> None:
         wl = workload_from_preset("chat")
         evaluator = ScriptedEvaluator({"tp1": saturating(1000, 64)})
